@@ -1,3 +1,6 @@
+use core::num;
+use std::borrow::BorrowMut;
+
 use bytemuck::{Pod, Zeroable};
 use wgpu::{include_wgsl, util::DeviceExt};
 use winit::{window::{Window, WindowBuilder}, event::*, event_loop::{ControlFlow, EventLoop}};
@@ -22,8 +25,56 @@ struct Vertex {
 }
 
 impl Vertex {
+    fn get_center(color: [f32; 3]) -> Vertex {
+        Vertex {
+            position: [0.0, 0.0, 0.0],
+            color: color,
+        }
+    }
+
+    fn new(position: [f32; 3], color: [f32; 3]) -> Vertex {
+        Vertex { position: position, color: color }
+    }
+}
+
+struct Circle {
+    vertices: Vec<Vertex>,
+    indices: Vec<u16>,
+}
+
+impl Circle {
+    fn new_centered(num_edges: u16, color: [f32; 3]) -> Circle {
+        let default_radius = 0.5;
+
+        let mut vertices = vec![Vertex::get_center(color)];
+        for i in 0..num_edges {
+            let twopi = 4.0 * libm::asinf(1.0);
+            let angle = (i as f32/ num_edges as f32) * twopi;
+            vertices.push(Vertex::new([
+                default_radius*libm::cosf(angle),
+                default_radius*libm::sinf(angle),
+                0.0,
+            ], color));
+        }
+        let mut indices = vec![];
+        for i in 0..num_edges {
+            indices.push(0);
+            indices.push(1 + i);
+            indices.push(1 + (i+1) % num_edges)
+        }
+
+        Circle {
+            vertices: vertices,
+            indices: indices
+        }
+    }
+}
+
+impl Vertex {
     const ATTRIBS: [wgpu::VertexAttribute; 2] =
         wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+    
+    
 
     fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
         use std::mem;
@@ -35,20 +86,6 @@ impl Vertex {
         }
     }
 }
-
-const VERTICES: &[Vertex] = &[
-    Vertex { position: [-0.0868241, 0.49240386, 0.0], color: [0.5, 0.0, 0.5] }, // A
-    Vertex { position: [-0.49513406, 0.06958647, 0.0], color: [0.5, 0.0, 0.5] }, // B
-    Vertex { position: [-0.21918549, -0.44939706, 0.0], color: [0.5, 0.0, 0.5] }, // C
-    Vertex { position: [0.35966998, -0.3473291, 0.0], color: [0.5, 0.0, 0.5] }, // D
-    Vertex { position: [0.44147372, 0.2347359, 0.0], color: [0.5, 0.0, 0.5] }, // E
-];
-
-const INDICES: &[u16] = &[
-    0, 1, 4,
-    1, 2, 4,
-    2, 3, 4,
-];
 
 impl State {
     // Creating some of the wgpu types requires async code
@@ -131,21 +168,24 @@ impl State {
             multiview: None,
         });
 
+        let circle = Circle::new_centered(10, [1.0, 1.0, 1.0]);
+
         let vertex_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Vertex Buffer"),
-                contents: bytemuck::cast_slice(VERTICES),
+                contents: bytemuck::cast_slice(&circle.vertices),
                 usage: wgpu::BufferUsages::VERTEX,
             }
         );
         let index_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(INDICES),
+                contents: bytemuck::cast_slice(&circle.indices),
                 usage: wgpu::BufferUsages::INDEX,
             }
         );
-        let num_indices = INDICES.len() as u32;
+
+        let num_indices = circle.indices.len() as u32;
 
         Self {
             surface,
@@ -175,6 +215,7 @@ impl State {
     }
 
     fn update(&mut self) {
+
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
