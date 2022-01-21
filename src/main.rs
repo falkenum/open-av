@@ -1,4 +1,4 @@
-use bytemuck::{Pod, Zeroable};
+// use bytemuck::{Pod, Zeroable};
 // use imgui::FontSource;
 use wgpu::{include_wgsl, util::DeviceExt};
 use winit::{window::{Window, WindowBuilder}, event::*, event_loop::{ControlFlow, EventLoop}};
@@ -19,76 +19,6 @@ struct State {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     camera_controller: CameraController,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct Vertex {
-    position: [f32; 3],
-    color: [f32; 3],
-}
-
-impl Vertex {
-    fn get_center(color: [f32; 3]) -> Vertex {
-        Vertex {
-            position: [0.0, 0.0, 0.0],
-            color: color,
-        }
-    }
-
-    fn new(position: [f32; 3], color: [f32; 3]) -> Vertex {
-        Vertex { position: position, color: color }
-    }
-}
-
-struct Circle {
-    vertices: Vec<Vertex>,
-    indices: Vec<u16>,
-}
-
-impl Circle {
-    fn new_centered(num_edges: u16, color_at_edge_idx: fn(u16, u16) -> [f32; 3]) -> Circle {
-        let default_radius = 0.5;
-
-        let mut vertices = vec![Vertex::get_center([0.5, 0.5, 0.5])];
-        for i in 0..num_edges {
-            let twopi = 4.0 * libm::asinf(1.0);
-            let angle = (i as f32/ num_edges as f32) * twopi;
-            vertices.push(Vertex::new([
-                default_radius*libm::cosf(angle),
-                default_radius*libm::sinf(angle),
-                0.0,
-            ], color_at_edge_idx(i, num_edges)));
-        }
-        let mut indices = vec![];
-        for i in 0..num_edges {
-            indices.push(0);
-            indices.push(1 + i);
-            indices.push(1 + (i+1) % num_edges)
-        }
-
-        Circle {
-            vertices: vertices,
-            indices: indices
-        }
-    }
-}
-
-impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 2] =
-        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
-    
-    
-
-    fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
-        use std::mem;
-
-        wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &Self::ATTRIBS,
-        }
-    }
 }
 
 impl State {
@@ -194,7 +124,7 @@ impl State {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",
-                buffers: &[Vertex::desc()],
+                buffers: &[open_av::Vertex::desc()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -226,28 +156,77 @@ impl State {
             multiview: None,
         });
 
-        let color_at_edge_idx = |edge_idx, num_edges: u16| -> [f32; 3] {
-            [0.5, 0.5, edge_idx as f32 / num_edges as f32]
+        // let cube = tobj::load_obj("res/cube.obj", )
+        let (obj_models, _obj_materials) = tobj::load_obj("res/cube.obj", &tobj::LoadOptions {
+                triangulate: true,
+                single_index: true,
+                ..Default::default()
+            },
+        ).unwrap();
+
+        // let obj_materials = obj_materialsj.unwrap();
+
+        let model = &obj_models[0];
+
+        let vertices = {
+            let mut vertices = Vec::new();
+            let positions = &model.mesh.positions;
+            for i in 0..positions.len() / 3 {
+                let x = positions[i * 3] / 2.;
+                let y = positions[i * 3 + 1] / 2.;
+                let z = positions[i * 3 + 2] / 2.;
+                vertices.push(open_av::Vertex {
+                    position: [x, y, z],
+                    color: [1., 1., 1.]
+                })
+            }
+            vertices
         };
 
-        let circle = Circle::new_centered(100, color_at_edge_idx);
+        let indices = &model.mesh.indices;
+
+
+        // let cube = &obj::parse("./res/cube.oj").unwrap().objects[0];
+        // let indices = {
+        //     let mut indices: Vec<u16> = Vec::new();
+        //     for geometry in cube.geometry.iter() {
+        //         for shape in geometry.shapes.iter() {
+        //             match shape.primitive {
+        //                 obj::Primitive::Triangle((x, _, _), (y, _, _), (z, _, _)) => {
+        //                     indices.push(x as u16);
+        //                     indices.push(y as u16);
+        //                     indices.push(z as u16);
+        //                 }
+        //                 _ => panic!("unhandled shape")
+        //             }
+        //         }
+        //     };
+
+        //     indices
+        // };
+
+        // let vertices: Vec<open_av::Vertex> = cube.vertices.iter().map(|v| { 
+        //     open_av::Vertex {
+        //         position: [v.x as f32, v.y as f32, v.z as f32],
+        //         color: [v.x as f32, v.y as f32, v.z as f32],
+        //     }
+        // }).collect();
 
         let vertex_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Vertex Buffer"),
-                contents: bytemuck::cast_slice(&circle.vertices),
+                contents: bytemuck::cast_slice(&vertices),
                 usage: wgpu::BufferUsages::VERTEX,
             }
         );
         let index_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(&circle.indices),
+                contents: bytemuck::cast_slice(indices),
                 usage: wgpu::BufferUsages::INDEX,
             }
         );
-
-        let num_indices = circle.indices.len() as u32;
+        let num_indices = indices.len() as u32;
 
         let camera_controller = CameraController::new(0.2);
 

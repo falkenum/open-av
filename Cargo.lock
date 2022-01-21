@@ -903,6 +903,7 @@ dependencies = [
  "imgui-winit-support",
  "libm",
  "pollster",
+ "tobj",
  "wgpu",
  "winit",
 ]
@@ -1143,6 +1144,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "tobj"
+version = "3.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "267a53ebc1139c69d3feedc33a381c382b2e3b0c47f44f48679e90c4a69b8dac"
+dependencies = [
+ "ahash",
 ]
 
 [[package]]
