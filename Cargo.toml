@@ -16,6 +16,7 @@ log = "0.4"
 tobj = "3.0"
 wgpu = "0.12"
 winit = "0.26"
+collada = "0.14.0"
 
 [build-dependencies]
 anyhow = "1.0"
