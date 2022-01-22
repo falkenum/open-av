@@ -127,13 +127,14 @@ impl Model {
             std::result::Result::Ok(doc) => anyhow::Result::Ok(doc),
             std::result::Result::Err(s) => anyhow::Result::Err(OpenFileError(s)),
         }.unwrap();
-
-        let objs = document.get_obj_set().unwrap();
-        // let brick_filename = document.get_images().get("brick").unwrap();
         let mte = document.get_material_to_effect();
         let effects = document.get_effect_library();
         let anim = document.get_animations();
         let bind_data = document.get_bind_data_set();
+        let objs = document.get_obj_set().unwrap();
+        let images = document.get_images();
+
+        // let brick_filename = document.get_images().get("brick").unwrap();
 
         // let material_library = objs.material_library.unwrap();
         // let diffuse_filename = match effects.get(material_library.as_str()).unwrap() {
@@ -194,16 +195,45 @@ impl Model {
                 for elt in &obj.geometry[i].mesh {
                     match elt {
                         PrimitiveElement::Triangles(triangles) => {
-                            let material = triangles.material.as_ref().unwrap();
+                            let material_name = triangles.material.as_ref().unwrap();
+                            let effect = effects.get(mte.get(material_name).unwrap()).unwrap();
+
+                            match effect {
+                                MaterialEffect::Lambert(lambert_effect) => {
+                                    // TODO don't push same material more than once
+                                    match &lambert_effect.diffuse {
+                                        LambertDiffuse::Texture(diffuse_name) => {
+                                            let diffuse_filename = images.get(diffuse_name).unwrap();
+                                            let diffuse_texture =
+                                                texture::Texture::load(device, queue, containing_folder.join(diffuse_filename))?;
+                                            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                                layout,
+                                                entries: &[
+                                                    wgpu::BindGroupEntry {
+                                                        binding: 0,
+                                                        resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
+                                                    },
+                                                    wgpu::BindGroupEntry {
+                                                        binding: 1,
+                                                        resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
+                                                    },
+                                                ],
+                                                label: None,
+                                            });
+                                            materials.push(Material {
+                                                name: format!("{}: {} ({})", material_name, diffuse_name, diffuse_filename),
+                                                diffuse_texture,
+                                                bind_group,
+                                            })
+                                        }
+                                        _ => panic!(),
+                                    };
+                                }
+                                _ => panic!(),
+                            }
                             vertex_indices.extend(triangles.vertices.iter());
                             tex_vertex_indices.extend(triangles.tex_vertices.as_ref().unwrap().iter());
                             normal_indices.extend(triangles.normals.as_ref().unwrap().iter());
-                            // triangles.vertices
-                            // vertices.push(ModelVertex {
-                            //     let x = triangels.ver
-                            //     position: [x as f32, y as f32, z as f32],
-                                
-                            // });
                         }
                         _ => panic!()
                     }
@@ -249,33 +279,11 @@ impl Model {
                     num_elements: vertex_indices.len() as u32,
                     name: format!("Obj name: {}, Geometry idx: {}", obj.name, i),
 
-                    // TODO
+                    // TODO more than one material per mesh
                     material: 0,
                 });
 
-                // let diffuse_texture =
-                //     texture::Texture::load(device, queue, containing_folder.join(obj.geometry[i].))?;
 
-                // let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                //     layout,
-                //     entries: &[
-                //         wgpu::BindGroupEntry {
-                //             binding: 0,
-                //             resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
-                //         },
-                //         wgpu::BindGroupEntry {
-                //             binding: 1,
-                //             resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
-                //         },
-                //     ],
-                //     label: None,
-                // });
-
-                // materials.push(Material {
-                //     name: diffuse_filename.clone(),
-                //     diffuse_texture,
-                //     bind_group,
-                // });
             }
         }
 
