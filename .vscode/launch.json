@@ -21,7 +21,11 @@
             },
             "args": [],
             "cwd": "${workspaceFolder}",
-            "env": {"RUST_BACKTRACE": "1"},
+            "env": {
+                "RUST_BACKTRACE": "1",
+                "PYTHONHOME": "C:\\Users\\sjfal\\anaconda3\\envs\\python36",
+                "PYTHONPATH": "C:\\Users\\sjfal\\anaconda3\\envs\\python36"
+            },
         },
         {
             "type": "lldb",

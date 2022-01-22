@@ -1,7 +1,7 @@
 use anyhow::*;
 use collada::PrimitiveElement;
 use collada::document::{LambertEffect, MaterialEffect, LambertDiffuse};
-use std::ops::Range;
+use std::ops::{Range, Index};
 use std::path::Path;
 use tobj::LoadOptions;
 use wgpu::util::DeviceExt;
@@ -188,6 +188,7 @@ impl Model {
                 result
             };
 
+            let diffuse_re = regex::Regex::new("(.*)-sampler").unwrap();
             for i in 0..obj.geometry.len() {
                 let mut vertex_indices: Vec<(usize, usize, usize)> = Vec::new();
                 let mut tex_vertex_indices: Vec<(usize, usize, usize)> = Vec::new();
@@ -202,7 +203,8 @@ impl Model {
                                 MaterialEffect::Lambert(lambert_effect) => {
                                     // TODO don't push same material more than once
                                     match &lambert_effect.diffuse {
-                                        LambertDiffuse::Texture(diffuse_name) => {
+                                        LambertDiffuse::Texture(diffuse_sampler_name) => {
+                                            let diffuse_name = diffuse_re.captures(diffuse_sampler_name).unwrap().get(1).unwrap().as_str();
                                             let diffuse_filename = images.get(diffuse_name).unwrap();
                                             let diffuse_texture =
                                                 texture::Texture::load(device, queue, containing_folder.join(diffuse_filename))?;
