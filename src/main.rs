@@ -431,10 +431,10 @@ impl VisualContext {
                 .into();
 
 
-        let rotation = cgmath::Quaternion::from_angle_y(cgmath::Deg(10.0 as f32));
-        for instance in self.instances.iter_mut() {
-            instance.rotation.v = rotation.rotate_vector(instance.rotation.v);
-        }
+        // let rotation = cgmath::Quaternion::from_angle_y(cgmath::Deg(10.0 as f32));
+        // for instance in self.instances.iter_mut() {
+        //     instance.rotation.v = rotation.rotate_vector(instance.rotation.v);
+        // }
         let instance_data = self.instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
 
         self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instance_data));
