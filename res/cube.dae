@@ -5,22 +5,22 @@
       <author>Blender User</author>
       <authoring_tool>Blender 3.0.0 commit date:2021-12-02, commit time:18:35, hash:f1cca3055776</authoring_tool>
     </contributor>
-    <created>2022-01-21T22:06:37</created>
-    <modified>2022-01-21T22:06:37</modified>
+    <created>2022-01-23T12:02:49</created>
+    <modified>2022-01-23T12:02:49</modified>
     <unit name="meter" meter="1"/>
     <up_axis>Z_UP</up_axis>
   </asset>
   <library_effects>
     <effect id="Material_003-effect">
       <profile_COMMON>
-        <newparam sid="brick-surface">
+        <newparam sid="brick_png_001-surface">
           <surface type="2D">
-            <init_from>brick</init_from>
+            <init_from>brick_png_001</init_from>
           </surface>
         </newparam>
-        <newparam sid="brick-sampler">
+        <newparam sid="brick_png_001-sampler">
           <sampler2D>
-            <source>brick-surface</source>
+            <source>brick_png_001-surface</source>
           </sampler2D>
         </newparam>
         <technique sid="common">
@@ -29,7 +29,7 @@
               <color sid="emission">0 0 0 1</color>
             </emission>
             <diffuse>
-              <texture texture="brick-sampler" texcoord="UVMap"/>
+              <texture texture="brick_png_001-sampler" texcoord="UVMap"/>
             </diffuse>
             <index_of_refraction>
               <float sid="ior">1.45</float>
@@ -40,8 +40,8 @@
     </effect>
   </library_effects>
   <library_images>
-    <image id="brick" name="brick">
-      <init_from>brick.png</init_from>
+    <image id="brick_png_001" name="brick_png_001">
+      <init_from>/C:/Users/sjfal/repos/open-av/res/textures/brick.png</init_from>
     </image>
   </library_images>
   <library_materials>
@@ -93,10 +93,46 @@
       </mesh>
     </geometry>
   </library_geometries>
+  <library_animations>
+    <animation id="action_container-Sphere" name="Sphere">
+      <animation id="Sphere_SphereAction_transform" name="Sphere">
+        <source id="Sphere_SphereAction_transform-input">
+          <float_array id="Sphere_SphereAction_transform-input-array" count="60">0.04166662 0.08333331 0.125 0.1666666 0.2083333 0.25 0.2916666 0.3333333 0.375 0.4166666 0.4583333 0.5 0.5416667 0.5833333 0.625 0.6666667 0.7083333 0.75 0.7916667 0.8333333 0.875 0.9166667 0.9583333 1 1.041667 1.083333 1.125 1.166667 1.208333 1.25 1.291667 1.333333 1.375 1.416667 1.458333 1.5 1.541667 1.583333 1.625 1.666667 1.708333 1.75 1.791667 1.833333 1.875 1.916667 1.958333 2 2.041667 2.083333 2.125 2.166667 2.208333 2.25 2.291667 2.333333 2.375 2.416667 2.458333 2.5</float_array>
+          <technique_common>
+            <accessor source="#Sphere_SphereAction_transform-input-array" count="60" stride="1">
+              <param name="TIME" type="float"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="Sphere_SphereAction_transform-output">
+          <float_array id="Sphere_SphereAction_transform-output-array" count="960">1 0 0 0 0 1 0 5.78627 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 5.78627 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 5.78627 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 5.78627 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 5.78627 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 5.78627 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 5.779131 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 5.758091 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 5.723719 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 5.676582 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 5.617246 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 5.546279 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 5.464249 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 5.371723 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 5.269268 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 5.157452 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 5.036841 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 4.908005 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 4.771508 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 4.62792 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 4.477808 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 4.321738 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 4.160278 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 3.993996 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 3.823458 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 3.649233 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 3.471887 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 3.291988 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 3.110104 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 2.926801 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 2.742647 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 2.558209 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 2.374055 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 2.190752 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 2.008868 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 1.828969 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 1.651623 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 1.477398 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 1.306861 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 1.140579 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 0.9791188 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 0.8230486 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 0.6729355 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 0.5293474 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 0.3928518 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 0.2640142 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 0.1434045 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 0.03158855 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 -0.07086611 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 -0.163393 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 -0.2454224 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 -0.3163891 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 -0.3757248 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 -0.4228621 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 -0.4572353 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 -0.4782743 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 -0.4854136 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 -0.4854136 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 -0.4854136 0 0 1 0 0 0 0 1 1 0 0 0 0 1 0 -0.4854136 0 0 1 0 0 0 0 1</float_array>
+          <technique_common>
+            <accessor source="#Sphere_SphereAction_transform-output-array" count="60" stride="16">
+              <param name="TRANSFORM" type="float4x4"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <source id="Sphere_SphereAction_transform-interpolation">
+          <Name_array id="Sphere_SphereAction_transform-interpolation-array" count="60">LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR LINEAR</Name_array>
+          <technique_common>
+            <accessor source="#Sphere_SphereAction_transform-interpolation-array" count="60" stride="1">
+              <param name="INTERPOLATION" type="name"/>
+            </accessor>
+          </technique_common>
+        </source>
+        <sampler id="Sphere_SphereAction_transform-sampler">
+          <input semantic="INPUT" source="#Sphere_SphereAction_transform-input"/>
+          <input semantic="OUTPUT" source="#Sphere_SphereAction_transform-output"/>
+          <input semantic="INTERPOLATION" source="#Sphere_SphereAction_transform-interpolation"/>
+        </sampler>
+        <channel source="#Sphere_SphereAction_transform-sampler" target="Sphere/transform"/>
+      </animation>
+    </animation>
+  </library_animations>
   <library_visual_scenes>
     <visual_scene id="Scene" name="Scene">
       <node id="Sphere" name="Sphere" type="NODE">
-        <matrix sid="transform">1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1</matrix>
+        <matrix sid="transform">1 0 0 0 0 1 0 -0.4854136 0 0 1 0 0 0 0 1</matrix>
         <instance_geometry url="#Sphere-mesh" name="Sphere">
           <bind_material>
             <technique_common>

@@ -424,17 +424,17 @@ impl VisualContext {
         self.camera_context.update();
 
         // Update the light
-        let old_position: cgmath::Vector3<_> = self.light_uniform.position.into();
-        self.light_uniform.position =
-            (cgmath::Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), cgmath::Deg(1.0))
-                * old_position)
-                .into();
+        // let old_position: cgmath::Vector3<_> = self.light_uniform.position.into();
+        // self.light_uniform.position =
+        //     (cgmath::Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), cgmath::Deg(1.0))
+        //         * old_position)
+        //         .into();
 
 
-        // let rotation = cgmath::Quaternion::from_angle_y(cgmath::Deg(10.0 as f32));
-        // for instance in self.instances.iter_mut() {
-        //     instance.rotation.v = rotation.rotate_vector(instance.rotation.v);
-        // }
+        let rotation = cgmath::Quaternion::from_angle_y(cgmath::Deg(10.0 as f32));
+        for instance in self.instances.iter_mut() {
+            instance.rotation.v = rotation.rotate_vector(instance.rotation.v);
+        }
         let instance_data = self.instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
 
         self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instance_data));
@@ -490,11 +490,11 @@ impl VisualContext {
             );
 
             render_pass.set_pipeline(&self.light_render_pipeline);
-            render_pass.draw_light_model(
-                &self.obj_model,
-                &self.camera_context.bind_group,
-                &self.light_bind_group,
-            );
+            // render_pass.draw_light_model(
+            //     &self.obj_model,
+            //     &self.camera_context.bind_group,
+            //     &self.light_bind_group,
+            // );
         }
 
         // let render_start = std::time::Instant::now();

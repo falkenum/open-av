@@ -98,31 +98,27 @@ impl Model {
         let effects = document.get_effect_library();
         let objs = document.get_obj_set().unwrap();
         let images = document.get_images();
+        let anim = document.get_animations().unwrap();
 
         let containing_folder = textures;
         let mut materials = Vec::new();
         let mut meshes = Vec::new();
 
+        let diffuse_re = regex::Regex::new(r"(.*)-sampler").unwrap();
+        let diffuse_filename_re = regex::Regex::new(r".*/([^/]*\.png)").unwrap();
         for obj in objs.objects {
-            let diffuse_re = regex::Regex::new("(.*)-sampler").unwrap();
             let mut vertices: Vec<ModelVertex> = Vec::new();
             let mut indices: Vec<u32> = Vec::new();
             let mut base_index : u32 = 0;
-            let mut vertex_idx_to_data: HashMap<usize, ModelVertex> = {
-                let mut result = HashMap::new();
+            for i in 0..obj.vertices.len() {
+                let v = obj.vertices[i];
 
-                for i in 0..obj.vertices.len() {
-                    let v = obj.vertices[i];
-                    result.insert(i, ModelVertex {
-                        position: [v.x as f32, v.y as f32, v.z as f32],
-                        tex_coords: [0.0; 2],
-                        normal: [0.0; 3],
-                    });
-
-                    vertices.push(result.get(&i).unwrap().clone());
-                }
-                result
-            };
+                vertices.push(ModelVertex {
+                    position: [v.x as f32, v.y as f32, v.z as f32],
+                    tex_coords: [0.0; 2],
+                    normal: [0.0; 3],
+                });
+            }
 
             for i in 0..obj.geometry.len() {
                 // let mut tex_vertex_indices: Vec<(usize, usize, usize)> = Vec::new();
@@ -141,7 +137,10 @@ impl Model {
                                     match &lambert_effect.diffuse {
                                         LambertDiffuse::Texture(diffuse_sampler_name) => {
                                             let diffuse_name = diffuse_re.captures(diffuse_sampler_name).unwrap().get(1).unwrap().as_str();
-                                            let diffuse_filename = images.get(diffuse_name).unwrap();
+                                            let diffuse_path_str = images.get(diffuse_name).unwrap();
+                                            let diffuse_filename = diffuse_filename_re
+                                                .captures(diffuse_path_str).unwrap()
+                                                .get(1).unwrap().as_str();
                                             let diffuse_texture =
                                                 texture::Texture::load(device, queue, containing_folder.join(diffuse_filename))?;
                                             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -180,13 +179,12 @@ impl Model {
                                     let tv = obj.tex_vertices[tex_vertex_index];
                                     let n = obj.normals[normal_index];
                                     indices.push(base_index + vertex_index as u32);
-                                    let ModelVertex {position, tex_coords: _, normal: _} = vertex_idx_to_data.get(&vertex_index).unwrap().to_owned();
+                                    let ModelVertex {position, tex_coords: _, normal: _} = vertices[vertex_index];
                                     let v = ModelVertex {
                                         position,
                                         tex_coords: [tv.x as f32, tv.y as f32],
                                         normal: [n.x as f32, n.y as f32, n.z as f32],
                                     };
-                                    vertex_idx_to_data.insert(vertex_index, v);
                                     vertices[vertex_index] = v;
                                 };
 

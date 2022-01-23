@@ -1,0 +1,6 @@
+[submodule "piston_collada"]
+	path = piston_collada
+	url = git@github.com:falkenum/piston_collada.git
+[submodule "external/piston_collada"]
+	path = external/piston_collada
+	url = git@github.com:falkenum/piston_collada.git
