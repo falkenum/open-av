@@ -73,7 +73,7 @@ fn create_render_pipeline(
     })
 }
 
-const NUM_INSTANCES_PER_ROW: u32 = 1;
+const NUM_INSTANCES_PER_ROW: u32 = 4;
 
 // main.rs
 #[repr(C)]
@@ -86,36 +86,34 @@ struct LightUniform {
     // Due to uniforms requiring 16 byte (4 float) spacing, we need to use a padding field here
     _padding2: u32,
 }
-struct Instance {
-    position: cgmath::Vector3<f32>,
-    rotation: cgmath::Quaternion<f32>,
-}
-
-impl Instance {
-    fn to_raw(&self) -> InstanceRaw {
-        let model =
-            cgmath::Matrix4::from_translation(self.position) * cgmath::Matrix4::from(self.rotation);
-        InstanceRaw {
-            model: model.into(),
-            // NEW!
-            normal: cgmath::Matrix3::from(self.rotation).into(),
-        }
-    }
-}
-
-
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct InstanceRaw {
-    model: [[f32; 4]; 4],
-    normal: [[f32; 3]; 3],
+struct Instance {
+    pose: [[f32; 4]; 4],
 }
 
-impl model::Vertex for InstanceRaw {
+// impl Instance {
+//     fn to_raw(&self) -> InstanceRaw {
+//         let model =
+//             cgmath::Matrix4::from_translation(self.position) * cgmath::Matrix4::from(self.rotation);
+//         InstanceRaw {
+//             model: model.into(),
+//             normal: cgmath::Matrix3::from(self.rotation).into(),
+//         }
+//     }
+// }
+
+
+// struct InstanceRaw {
+//     model: [[f32; 4]; 4],
+//     normal: [[f32; 3]; 3],
+// }
+
+impl model::Vertex for Instance {
     fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
         use std::mem;
         wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<InstanceRaw>() as wgpu::BufferAddress,
+            array_stride: mem::size_of::<Instance>() as wgpu::BufferAddress,
             // We need to switch from using a step mode of Vertex to Instance
             // This means that our shaders will only change to use the next
             // instance when the shader starts processing a new instance
@@ -144,21 +142,6 @@ impl model::Vertex for InstanceRaw {
                     offset: mem::size_of::<[f32; 12]>() as wgpu::BufferAddress,
                     shader_location: 8,
                     format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 16]>() as wgpu::BufferAddress,
-                    shader_location: 9,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 19]>() as wgpu::BufferAddress,
-                    shader_location: 10,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 22]>() as wgpu::BufferAddress,
-                    shader_location: 11,
-                    format: wgpu::VertexFormat::Float32x3,
                 },
             ],
         }
@@ -231,6 +214,23 @@ impl VisualContext {
         surface.configure(&device, &config);
         let camera_context = CameraContext::new(&device, config.width as f32 / config.height as f32);
 
+        // let animation_bind_group_layout =
+        //     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        //         entries: &[
+        //             wgpu::BindGroupLayoutEntry {
+        //                 binding: 0,
+        //                 visibility: wgpu::ShaderStages::VERTEX,
+        //                 ty: wgpu::BindingType::Buffer {
+        //                     has_dynamic_offset: false,
+        //                     ty: wgpu::BufferBindingType::,
+        //                     min_binding_size: None,
+        //                 },
+        //                 count: None,
+        //             },
+        //         ],
+        //         label: Some("animation_bind_group_layout")
+        //     });
+
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[
@@ -255,8 +255,6 @@ impl VisualContext {
             });
 
 
-
-
         const SPACE_BETWEEN: f32 = 3.0;
         let instances = (0..NUM_INSTANCES_PER_ROW)
             .flat_map(|z| {
@@ -275,7 +273,12 @@ impl VisualContext {
                         cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
                     };
 
-                    Instance { position, rotation }
+                    Instance { 
+                        pose: [[1., 0., 0., 0.],
+                               [0., 1., 0., 0.],
+                               [0., 0., 1., 0.],
+                               [0., 0., 0., 1.]],
+                    }
                 })
             })
             .collect::<Vec<_>>();
@@ -319,16 +322,15 @@ impl VisualContext {
             label: None,
         });
 
-        let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Instance Buffer"),
-            contents: bytemuck::cast_slice(&instance_data),
+            contents: bytemuck::cast_slice(&instances),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
 
 
-        let path = std::env::current_dir().unwrap().as_path().join("res").join("cube.obj");
+        let path = std::env::current_dir().unwrap().as_path().join("res").join("cube.dae");
         let obj_model = model::Model::load(
             &device,
             &queue,
@@ -336,6 +338,15 @@ impl VisualContext {
             &path,
         )
         .unwrap();
+
+        // let animation_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        //     layout: &animation_bind_group_layout,
+        //     entries: &[wgpu::BindGroupEntry {
+        //         binding: 0,
+        //         resource: obj_model.meshes[0].animation.as_ref().unwrap().poses.as_entire_binding(),
+        //     }],
+        //     label: None,
+        // });
 
         let depth_texture =
             texture::Texture::create_depth_texture(&device, &config, "depth_texture");
@@ -347,6 +358,7 @@ impl VisualContext {
                     &texture_bind_group_layout,
                     &camera_context.bind_group_layout,
                     &light_bind_group_layout,
+                    // &animation_bind_group_layout,
                 ],
                 push_constant_ranges: &[],
             });
@@ -361,7 +373,7 @@ impl VisualContext {
                 &render_pipeline_layout,
                 config.format,
                 Some(texture::Texture::DEPTH_FORMAT),
-                &[model::ModelVertex::desc(), InstanceRaw::desc()],
+                &[model::ModelVertex::desc(), Instance::desc()],
                 shader,
             )
         };
@@ -397,6 +409,7 @@ impl VisualContext {
             instances,
             instance_buffer,
             depth_texture,
+
             light_uniform,
             light_buffer,
             light_bind_group,
@@ -431,13 +444,13 @@ impl VisualContext {
         //         .into();
 
 
-        let rotation = cgmath::Quaternion::from_angle_y(cgmath::Deg(10.0 as f32));
-        for instance in self.instances.iter_mut() {
-            instance.rotation.v = rotation.rotate_vector(instance.rotation.v);
-        }
-        let instance_data = self.instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
+        // let rotation = cgmath::Quaternion::from_angle_y(cgmath::Deg(10.0 as f32));
+        // for instance in self.instances.iter_mut() {
+        //     instance.rotation.v = rotation.rotate_vector(instance.rotation.v);
+        // }
+        // let instance_data = self.instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
 
-        self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&instance_data));
+        self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
         self.queue.write_buffer(&self.camera_context.buffer, 0, bytemuck::cast_slice(&[self.camera_context.uniform]));
         self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
     }

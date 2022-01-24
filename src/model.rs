@@ -1,5 +1,6 @@
 use anyhow::*;
-use collada::PrimitiveElement;
+use cgmath::Matrix4;
+use collada::{PrimitiveElement, Skeleton, Joint};
 use collada::document::{LambertEffect, MaterialEffect, LambertDiffuse};
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -10,6 +11,44 @@ use wgpu::util::DeviceExt;
 use std::fmt::Display;
 
 use crate::texture;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Pose {
+    value: [[f32; 4]; 4],
+}
+
+// impl Vertex for Pose {
+//     fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
+//         use std::mem;
+//         wgpu::VertexBufferLayout {
+//             array_stride: mem::size_of::<Pose>() as wgpu::BufferAddress,
+//             step_mode: wgpu::VertexStepMode::Instance,
+//             attributes: &[
+//                 wgpu::VertexAttribute {
+//                     offset: 0,
+//                     shader_location: 12,
+//                     format: wgpu::VertexFormat::Float32x4,
+//                 },
+//                 wgpu::VertexAttribute {
+//                     offset: mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
+//                     shader_location: 13,
+//                     format: wgpu::VertexFormat::Float32x4,
+//                 },
+//                 wgpu::VertexAttribute {
+//                     offset: mem::size_of::<[f32; 8]>() as wgpu::BufferAddress,
+//                     shader_location: 14,
+//                     format: wgpu::VertexFormat::Float32x4,
+//                 },
+//                 wgpu::VertexAttribute {
+//                     offset: mem::size_of::<[f32; 12]>() as wgpu::BufferAddress,
+//                     shader_location: 15,
+//                     format: wgpu::VertexFormat::Float32x4,
+//                 },
+//             ],
+//         }
+//     }
+// }
 
 pub trait Vertex {
     fn desc<'a>() -> wgpu::VertexBufferLayout<'a>;
@@ -50,6 +89,11 @@ impl Vertex for ModelVertex {
     }
 }
 
+pub struct Animation {
+    pub poses: wgpu::Buffer,
+    pub times: Vec<f32>,
+}
+
 #[derive(Debug)]
 struct OpenFileError(&'static str);
 
@@ -73,6 +117,7 @@ pub struct Mesh {
     pub index_buffer: wgpu::Buffer,
     pub num_elements: u32,
     pub material: usize,
+    pub animation: Option<Animation>,
 }
 
 pub struct Model {
@@ -87,10 +132,8 @@ impl Model {
         layout: &wgpu::BindGroupLayout,
         path: P,
     ) -> Result<Self> {
-        let res = std::env::current_dir().unwrap().as_path().join("res");
-        let textures = res.join("textures");
-        let p = res.join("cube.dae");
-        let document = match collada::document::ColladaDocument::from_path(p.as_ref()) {
+        let textures = path.as_ref().parent().unwrap().join("textures");
+        let document = match collada::document::ColladaDocument::from_path(path.as_ref()) {
             std::result::Result::Ok(doc) => anyhow::Result::Ok(doc),
             std::result::Result::Err(s) => anyhow::Result::Err(OpenFileError(s)),
         }.unwrap();
@@ -98,7 +141,22 @@ impl Model {
         let effects = document.get_effect_library();
         let objs = document.get_obj_set().unwrap();
         let images = document.get_images();
-        let anim = document.get_animations().unwrap();
+        let animations = document.get_animations().unwrap();
+
+        // TODO support multiple animations
+        let mut obj_name_to_anim: HashMap<String, collada::Animation> = HashMap::new();
+
+        for animation in animations {
+            obj_name_to_anim.insert(animation.target.clone(), animation);
+        }
+        // let bind_data_set = document.get_bind_data_set().unwrap();
+        // let skeletons = document.get_skeletons().unwrap();
+
+        // for Skeleton {joints, bind_poses} in skeletons.iter() {
+        //     for Joint {name, parent_index, inverse_bind_pose} in joints {
+        //         println!("{}", name);
+        //     }
+        // }
 
         let containing_folder = textures;
         let mut materials = Vec::new();
@@ -211,6 +269,37 @@ impl Model {
                     usage: wgpu::BufferUsages::INDEX,
                 });
 
+                let animation = match obj_name_to_anim.get(&obj.name) {
+                    Some(a) => {
+                        let (poses, times) = {
+                            let mut poses: Vec<Pose> = Vec::new();
+                            let mut times: Vec<f32> = Vec::new();
+                            for i in 0..a.sample_poses.len() {
+                                let p = Pose {
+                                    value: a.sample_poses[i],
+                                };
+
+                                poses.push(p);
+                                times.push(a.sample_times[i]);
+                            };
+                            (poses, times)
+                        };
+                        let pose_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some(&format!("Pose Buffer")),
+                            contents: bytemuck::cast_slice(&poses),
+                            usage: wgpu::BufferUsages::UNIFORM,
+                        });
+                        Some(Animation {
+                            poses: pose_buffer,
+                            times,
+                        })
+                    }
+                    None => None
+                };
+
+
+
+
                 meshes.push(Mesh {
                     vertex_buffer,
                     index_buffer,
@@ -219,6 +308,8 @@ impl Model {
 
                     // TODO more than one material per mesh
                     material: 0,
+                    // TODO more than one animation per mesh
+                    animation,
                 });
 
 
