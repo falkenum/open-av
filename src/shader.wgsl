@@ -40,17 +40,23 @@ fn vs_main(
     model: VertexInput,
     instance: InstanceInput,
 ) -> VertexOutput {
-    let pose_matrix = mat4x4<f32>(
+    let instance_pose_matrix = mat4x4<f32>(
         instance.pose_matrix_0,
         instance.pose_matrix_1,
         instance.pose_matrix_2,
         instance.pose_matrix_3,
     );
+    let translation_vec = vec4<f32>(
+        instance_pose_matrix[0][3], 
+        instance_pose_matrix[1][3], 
+        instance_pose_matrix[2][3],
+        1.0,
+    );
     var out: VertexOutput;
     out.tex_coords = model.tex_coords;
-    var rotation: vec4<f32> = pose_matrix * vec4<f32>(model.normal, 0.0);
-    out.world_normal = rotation.xyz;
-    var world_position: vec4<f32> = pose_matrix * vec4<f32>(model.position, 1.0);
+    var normal: vec4<f32> = instance_pose_matrix * vec4<f32>(model.normal, 0.0);
+    out.world_normal = normal.xyz;
+    var world_position: vec4<f32> = translation_vec + vec4<f32>(model.position, 0.0);
     out.world_position = world_position.xyz;
     out.clip_position = camera.view_proj * world_position;
     return out;

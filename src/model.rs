@@ -12,10 +12,9 @@ use std::fmt::Display;
 
 use crate::texture;
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct Pose {
-    value: [[f32; 4]; 4],
+#[derive(Clone, Debug)]
+pub struct Pose {
+    pub value: [[f32; 4]; 4],
 }
 
 // impl Vertex for Pose {
@@ -89,8 +88,10 @@ impl Vertex for ModelVertex {
     }
 }
 
+
+#[derive(Clone)]
 pub struct Animation {
-    pub poses: wgpu::Buffer,
+    pub poses: Vec<Pose>,
     pub times: Vec<f32>,
 }
 
@@ -146,8 +147,10 @@ impl Model {
         // TODO support multiple animations
         let mut obj_name_to_anim: HashMap<String, collada::Animation> = HashMap::new();
 
+        let obj_name_re = regex::Regex::new(r"([^/]*)/").unwrap();
         for animation in animations {
-            obj_name_to_anim.insert(animation.target.clone(), animation);
+            let obj_name = obj_name_re.captures(animation.target.as_str()).unwrap().get(1).unwrap().as_str();
+            obj_name_to_anim.insert(obj_name.to_string(), animation);
         }
         // let bind_data_set = document.get_bind_data_set().unwrap();
         // let skeletons = document.get_skeletons().unwrap();
@@ -284,13 +287,13 @@ impl Model {
                             };
                             (poses, times)
                         };
-                        let pose_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some(&format!("Pose Buffer")),
-                            contents: bytemuck::cast_slice(&poses),
-                            usage: wgpu::BufferUsages::UNIFORM,
-                        });
+                        // let pose_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        //     label: Some(&format!("Pose Buffer")),
+                        //     contents: bytemuck::cast_slice(&poses),
+                        //     usage: wgpu::BufferUsages::UNIFORM,
+                        // });
                         Some(Animation {
-                            poses: pose_buffer,
+                            poses,
                             times,
                         })
                     }

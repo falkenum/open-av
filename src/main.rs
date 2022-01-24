@@ -1,6 +1,7 @@
 use std::{iter, fmt::Display};
 
 use cgmath::prelude::*;
+use lazy_static::lazy_static;
 use wgpu::util::DeviceExt;
 use winit::{
     event::*,
@@ -73,7 +74,7 @@ fn create_render_pipeline(
     })
 }
 
-const NUM_INSTANCES_PER_ROW: u32 = 4;
+const NUM_INSTANCES_PER_ROW: u32 = 1;
 
 // main.rs
 #[repr(C)]
@@ -156,15 +157,17 @@ struct VisualContext {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     render_pipeline: wgpu::RenderPipeline,
-    light_render_pipeline: wgpu::RenderPipeline,
+    // light_render_pipeline: wgpu::RenderPipeline,
     obj_model: model::Model,
     camera_context: camera::CameraContext,
     instances: Vec<Instance>,
     instance_buffer: wgpu::Buffer,
     depth_texture: texture::Texture,
-    light_uniform: LightUniform,
-    light_buffer: wgpu::Buffer,
+    // light_uniform: LightUniform,
+    // light_buffer: wgpu::Buffer,
     light_bind_group: wgpu::BindGroup,
+    last_frame_update: std::time::Instant,
+    animation_start: std::time::Instant,
 }
 
 trait AvElement {
@@ -262,16 +265,16 @@ impl VisualContext {
                     let x = SPACE_BETWEEN * (x as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
                     let z = SPACE_BETWEEN * (z as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
 
-                    let position = cgmath::Vector3 { x, y: 0.0, z };
+                    // let position = cgmath::Vector3 { x, y: 0.0, z };
 
-                    let rotation = if position.is_zero() {
-                        cgmath::Quaternion::from_axis_angle(
-                            cgmath::Vector3::unit_z(),
-                            cgmath::Deg(0.0),
-                        )
-                    } else {
-                        cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
-                    };
+                    // let rotation = if position.is_zero() {
+                    //     cgmath::Quaternion::from_axis_angle(
+                    //         cgmath::Vector3::unit_z(),
+                    //         cgmath::Deg(0.0),
+                    //     )
+                    // } else {
+                    //     cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
+                    // };
 
                     Instance { 
                         pose: [[1., 0., 0., 0.],
@@ -377,25 +380,25 @@ impl VisualContext {
                 shader,
             )
         };
-        let light_render_pipeline = {
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Light Pipeline Layout"),
-                bind_group_layouts: &[&camera_context.bind_group_layout, &light_bind_group_layout],
-                push_constant_ranges: &[],
-            });
-            let shader = wgpu::ShaderModuleDescriptor {
-                label: Some("Light Shader"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("light.wgsl").into()),
-            };
-            create_render_pipeline(
-                &device,
-                &layout,
-                config.format,
-                Some(texture::Texture::DEPTH_FORMAT),
-                &[model::ModelVertex::desc()],
-                shader,
-            )
-        };
+        // let light_render_pipeline = {
+        //     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        //         label: Some("Light Pipeline Layout"),
+        //         bind_group_layouts: &[&camera_context.bind_group_layout, &light_bind_group_layout],
+        //         push_constant_ranges: &[],
+        //     });
+        //     let shader = wgpu::ShaderModuleDescriptor {
+        //         label: Some("Light Shader"),
+        //         source: wgpu::ShaderSource::Wgsl(include_str!("light.wgsl").into()),
+        //     };
+        //     create_render_pipeline(
+        //         &device,
+        //         &layout,
+        //         config.format,
+        //         Some(texture::Texture::DEPTH_FORMAT),
+        //         &[model::ModelVertex::desc()],
+        //         shader,
+        //     )
+        // };
 
         Self {
             surface,
@@ -410,10 +413,13 @@ impl VisualContext {
             instance_buffer,
             depth_texture,
 
-            light_uniform,
-            light_buffer,
+            // light_uniform,
+            // light_buffer,
             light_bind_group,
-            light_render_pipeline,
+            // light_render_pipeline,
+
+            last_frame_update: std::time::Instant::now(),
+            animation_start: std::time::Instant::now(),
         }
     }
 
@@ -442,17 +448,29 @@ impl VisualContext {
         //     (cgmath::Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), cgmath::Deg(1.0))
         //         * old_position)
         //         .into();
+        let anim = self.obj_model.meshes[0].animation.clone().unwrap();
+        // .poses;
+        // let times = self.obj_model.meshes[0].animation.unwrap().times;
+        // let elapsed = self.last_frame_update.elapsed();
+        let now = std::time::Instant::now();
+        let mut i = 0;
+        while now - self.animation_start > std::time::Duration::from_millis((anim.times[i] * 1000.0) as u64) {
+            i += 1;
 
+            if i >= anim.times.len() {
+                self.animation_start = now;
+                i = 0;
+            }
+        }
 
-        // let rotation = cgmath::Quaternion::from_angle_y(cgmath::Deg(10.0 as f32));
-        // for instance in self.instances.iter_mut() {
-        //     instance.rotation.v = rotation.rotate_vector(instance.rotation.v);
-        // }
-        // let instance_data = self.instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
+        for instance in self.instances.iter_mut() {
+            instance.pose = anim.poses[i].value;
+            // instance.pose[1][3] += 0.1;
+        }
 
         self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
         self.queue.write_buffer(&self.camera_context.buffer, 0, bytemuck::cast_slice(&[self.camera_context.uniform]));
-        self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
+        // self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -502,7 +520,7 @@ impl VisualContext {
                 &self.light_bind_group,
             );
 
-            render_pass.set_pipeline(&self.light_render_pipeline);
+            // render_pass.set_pipeline(&self.light_render_pipeline);
             // render_pass.draw_light_model(
             //     &self.obj_model,
             //     &self.camera_context.bind_group,
@@ -530,10 +548,10 @@ fn main() {
 
     // State::new uses async code, so we're going to wait for it to finish
     let mut state = pollster::block_on(VisualContext::new(&window));
-    let mut last_model_update = std::time::Instant::now();
+    // let mut last_model_update = std::time::Instant::now();
     event_loop.run(move |event, _, control_flow| {
-        if last_model_update.elapsed() > std::time::Duration::from_millis(1000) / 30 {
-            last_model_update = std::time::Instant::now();
+        if state.last_frame_update.elapsed() > std::time::Duration::from_millis(1000) / 30 {
+            state.last_frame_update = std::time::Instant::now();
 
             state.update();
             match state.render() {

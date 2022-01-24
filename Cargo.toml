@@ -18,6 +18,7 @@ wgpu = "0.12"
 winit = "0.26"
 regex = "1"
 collada = { path = "./external/piston_collada" }
+lazy_static = "1.4.0"
 
 [build-dependencies]
 anyhow = "1.0"

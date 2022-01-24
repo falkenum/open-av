@@ -1067,6 +1067,7 @@ dependencies = [
  "fs_extra",
  "glob",
  "image",
+ "lazy_static",
  "log",
  "pollster",
  "regex",
