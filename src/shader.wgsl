@@ -16,6 +16,9 @@ struct InstanceInput {
     [[location(6)]] pose_matrix_1: vec4<f32>;
     [[location(7)]] pose_matrix_2: vec4<f32>;
     [[location(8)]] pose_matrix_3: vec4<f32>;
+    [[location(9)]] normal_matrix_0: vec3<f32>;
+    [[location(10)]] normal_matrix_1: vec3<f32>;
+    [[location(11)]] normal_matrix_2: vec3<f32>;
 };
 
 struct VertexOutput {
@@ -46,17 +49,22 @@ fn vs_main(
         instance.pose_matrix_2,
         instance.pose_matrix_3,
     );
-    let translation_vec = vec4<f32>(
-        instance_pose_matrix[0][3], 
-        instance_pose_matrix[1][3], 
-        instance_pose_matrix[2][3],
-        1.0,
+    let instance_normal_matrix = mat3x3<f32>(
+        instance.normal_matrix_0,
+        instance.normal_matrix_1,
+        instance.normal_matrix_2,
     );
+    // let translation_vec = vec4<f32>(
+    //     instance_pose_matrix[0][3], 
+    //     instance_pose_matrix[1][3], 
+    //     instance_pose_matrix[2][3],
+    //     0.0,
+    // );
     var out: VertexOutput;
     out.tex_coords = model.tex_coords;
-    var normal: vec4<f32> = instance_pose_matrix * vec4<f32>(model.normal, 0.0);
+    var normal: vec3<f32> = instance_normal_matrix * model.normal;
     out.world_normal = normal.xyz;
-    var world_position: vec4<f32> = translation_vec + vec4<f32>(model.position, 0.0);
+    var world_position: vec4<f32> = instance_pose_matrix * vec4<f32>(model.position, 1.0);
     out.world_position = world_position.xyz;
     out.clip_position = camera.view_proj * world_position;
     return out;

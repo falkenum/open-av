@@ -1,5 +1,5 @@
 use anyhow::*;
-use cgmath::Matrix4;
+use cgmath::{Matrix4, SquareMatrix, Matrix};
 use collada::{PrimitiveElement, Skeleton, Joint};
 use collada::document::{LambertEffect, MaterialEffect, LambertDiffuse};
 use std::collections::HashMap;
@@ -13,41 +13,10 @@ use std::fmt::Display;
 use crate::texture;
 
 #[derive(Clone, Debug)]
-pub struct Pose {
-    pub value: [[f32; 4]; 4],
+pub struct Transform {
+    pub pose: [[f32; 4]; 4],
+    pub normal: [[f32; 3]; 3],
 }
-
-// impl Vertex for Pose {
-//     fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
-//         use std::mem;
-//         wgpu::VertexBufferLayout {
-//             array_stride: mem::size_of::<Pose>() as wgpu::BufferAddress,
-//             step_mode: wgpu::VertexStepMode::Instance,
-//             attributes: &[
-//                 wgpu::VertexAttribute {
-//                     offset: 0,
-//                     shader_location: 12,
-//                     format: wgpu::VertexFormat::Float32x4,
-//                 },
-//                 wgpu::VertexAttribute {
-//                     offset: mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
-//                     shader_location: 13,
-//                     format: wgpu::VertexFormat::Float32x4,
-//                 },
-//                 wgpu::VertexAttribute {
-//                     offset: mem::size_of::<[f32; 8]>() as wgpu::BufferAddress,
-//                     shader_location: 14,
-//                     format: wgpu::VertexFormat::Float32x4,
-//                 },
-//                 wgpu::VertexAttribute {
-//                     offset: mem::size_of::<[f32; 12]>() as wgpu::BufferAddress,
-//                     shader_location: 15,
-//                     format: wgpu::VertexFormat::Float32x4,
-//                 },
-//             ],
-//         }
-//     }
-// }
 
 pub trait Vertex {
     fn desc<'a>() -> wgpu::VertexBufferLayout<'a>;
@@ -91,7 +60,7 @@ impl Vertex for ModelVertex {
 
 #[derive(Clone)]
 pub struct Animation {
-    pub poses: Vec<Pose>,
+    pub transforms: Vec<Transform>,
     pub times: Vec<f32>,
 }
 
@@ -274,26 +243,30 @@ impl Model {
 
                 let animation = match obj_name_to_anim.get(&obj.name) {
                     Some(a) => {
-                        let (poses, times) = {
-                            let mut poses: Vec<Pose> = Vec::new();
+                        let (transforms, times) = {
+                            let mut transforms: Vec<Transform> =  Vec::new();
                             let mut times: Vec<f32> = Vec::new();
                             for i in 0..a.sample_poses.len() {
-                                let p = Pose {
-                                    value: a.sample_poses[i],
+                                let submatrix = [
+                                    [a.sample_poses[i][0][0], a.sample_poses[i][0][1], a.sample_poses[i][0][2]],
+                                    [a.sample_poses[i][1][0], a.sample_poses[i][1][1], a.sample_poses[i][1][2]],
+                                    [a.sample_poses[i][2][0], a.sample_poses[i][2][1], a.sample_poses[i][2][2]],
+                                ];
+                                let pose_inverse = cgmath::Matrix3::from(submatrix).invert().unwrap();
+                                let normal_transform = pose_inverse.transpose();
+                                let p = Transform {
+                                    pose: a.sample_poses[i],
+                                    normal: normal_transform.into(),
                                 };
 
-                                poses.push(p);
+                                transforms.push(p);
                                 times.push(a.sample_times[i]);
                             };
-                            (poses, times)
+                            (transforms, times)
                         };
-                        // let pose_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        //     label: Some(&format!("Pose Buffer")),
-                        //     contents: bytemuck::cast_slice(&poses),
-                        //     usage: wgpu::BufferUsages::UNIFORM,
-                        // });
+
                         Some(Animation {
-                            poses,
+                            transforms,
                             times,
                         })
                     }
