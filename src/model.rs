@@ -138,17 +138,17 @@ impl Model {
         let diffuse_filename_re = regex::Regex::new(r".*/([^/]*\.png)").unwrap();
         for obj in objs.objects {
             let mut vertices: Vec<ModelVertex> = Vec::new();
-            let mut indices: Vec<u32> = Vec::new();
+            // let mut indices: Vec<u32> = Vec::new();
             let mut base_index : u32 = 0;
-            for i in 0..obj.vertices.len() {
-                let v = obj.vertices[i];
+            // for i in 0..obj.vertices.len() {
+            //     let v = obj.vertices[i];
 
-                vertices.push(ModelVertex {
-                    position: [v.x as f32, v.y as f32, v.z as f32],
-                    tex_coords: [0.0; 2],
-                    normal: [0.0; 3],
-                });
-            }
+            //     vertices.push(ModelVertex {
+            //         position: [v.x as f32, v.y as f32, v.z as f32],
+            //         tex_coords: [0.0; 2],
+            //         normal: [0.0; 3],
+            //     });
+            // }
 
             for i in 0..obj.geometry.len() {
                 // let mut tex_vertex_indices: Vec<(usize, usize, usize)> = Vec::new();
@@ -206,16 +206,19 @@ impl Model {
                                 let tex_vertex_indices = triangles.tex_vertices.as_ref().unwrap().get(i).unwrap();
                                 let normal_indices = triangles.normals.as_ref().unwrap().get(i).unwrap();
                                 let mut add_vertex = |vertex_index: usize, tex_vertex_index: usize, normal_index: usize| {
+                                    let v = obj.vertices[vertex_index];
                                     let tv = obj.tex_vertices[tex_vertex_index];
                                     let n = obj.normals[normal_index];
-                                    indices.push(base_index + vertex_index as u32);
-                                    let ModelVertex {position, tex_coords: _, normal: _} = vertices[vertex_index];
-                                    let v = ModelVertex {
-                                        position,
+                                    // indices.push(base_index + vertex_index as u32);
+                                    // let ModelVertex {position, tex_coords: _, normal: _} = vertices[vertex_index];
+                                    let mv = ModelVertex {
+                                        position: [v.x as f32, v.y as f32, v.z as f32],
                                         tex_coords: [tv.x as f32, tv.y as f32],
+                                        // ((n.x - (-0.06236368)) < .000001) && ((n.y - 0.6331579) < .000001) && ((n.z - (-0.7715063)) < .000001)
                                         normal: [n.x as f32, n.y as f32, n.z as f32],
                                     };
-                                    vertices[vertex_index] = v;
+                                    // vertices[vertex_index] = v;
+                                    vertices.push(mv);
                                 };
 
                                 add_vertex(vertex_indices.0, tex_vertex_indices.0, normal_indices.0);
@@ -223,7 +226,7 @@ impl Model {
                                 add_vertex(vertex_indices.2, tex_vertex_indices.2, normal_indices.2);
 
                             }
-                            base_index += triangles.vertices.len() as u32 * 3;
+                            // base_index += triangles.vertices.len() as u32 * 3;
 
 
                         }
@@ -235,6 +238,8 @@ impl Model {
                     contents: bytemuck::cast_slice(&vertices),
                     usage: wgpu::BufferUsages::VERTEX,
                 });
+
+                let indices: Vec<u32> = (0 as u32..vertices.len() as u32).collect();
                 let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some(&format!("{:?} Vertex Index Buffer", path.as_ref())),
                     contents: bytemuck::cast_slice(&indices),

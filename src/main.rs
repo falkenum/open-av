@@ -195,7 +195,7 @@ impl VisualContext {
 
         // The instance is a handle to our GPU
         // BackendBit::PRIMARY => Vulkan + Metal + DX12 + Browser WebGPU
-        let instance = wgpu::Instance::new(wgpu::Backends::all());
+        let instance = wgpu::Instance::new(wgpu::Backends::VULKAN);
         let surface = unsafe { instance.create_surface(window) };
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -357,15 +357,6 @@ impl VisualContext {
         )
         .unwrap();
 
-        // let animation_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        //     layout: &animation_bind_group_layout,
-        //     entries: &[wgpu::BindGroupEntry {
-        //         binding: 0,
-        //         resource: obj_model.meshes[0].animation.as_ref().unwrap().poses.as_entire_binding(),
-        //     }],
-        //     label: None,
-        // });
-
         let depth_texture =
             texture::Texture::create_depth_texture(&device, &config, "depth_texture");
 
@@ -376,7 +367,6 @@ impl VisualContext {
                     &texture_bind_group_layout,
                     &camera_context.bind_group_layout,
                     &light_bind_group_layout,
-                    // &animation_bind_group_layout,
                 ],
                 push_constant_ranges: &[],
             });
@@ -483,7 +473,6 @@ impl VisualContext {
             instance.normal = anim.transforms[i].normal;
             // instance.pose[1][3] += 0.1;
         }
-
         self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
         self.queue.write_buffer(&self.camera_context.buffer, 0, bytemuck::cast_slice(&[self.camera_context.uniform]));
         // self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
