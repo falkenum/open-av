@@ -2,7 +2,7 @@ use std::{iter, fmt::Display};
 
 use cgmath::prelude::*;
 use lazy_static::lazy_static;
-use wgpu::util::DeviceExt;
+use wgpu::{util::DeviceExt, include_wgsl};
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
@@ -372,10 +372,7 @@ impl VisualContext {
             });
 
         let render_pipeline = {
-            let shader = wgpu::ShaderModuleDescriptor {
-                label: Some("Normal Shader"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-            };
+            let shader = include_wgsl!("shader.wgsl");
             create_render_pipeline(
                 &device,
                 &render_pipeline_layout,
