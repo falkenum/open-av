@@ -1,12 +1,10 @@
 use anyhow::*;
-use cgmath::{Matrix4, SquareMatrix, Matrix};
-use collada::{PrimitiveElement, Skeleton, Joint};
-use collada::document::{LambertEffect, MaterialEffect, LambertDiffuse};
+use cgmath::{SquareMatrix, Matrix};
+use collada::{PrimitiveElement};
+use collada::document::{LambertDiffuse, MaterialEffect};
 use std::collections::HashMap;
-use std::hash::Hash;
-use std::ops::{Range, Index};
+use std::ops::{Range};
 use std::path::Path;
-use tobj::LoadOptions;
 use wgpu::util::DeviceExt;
 use std::fmt::Display;
 
@@ -121,14 +119,6 @@ impl Model {
             let obj_name = obj_name_re.captures(animation.target.as_str()).unwrap().get(1).unwrap().as_str();
             obj_name_to_anim.insert(obj_name.to_string(), animation);
         }
-        // let bind_data_set = document.get_bind_data_set().unwrap();
-        // let skeletons = document.get_skeletons().unwrap();
-
-        // for Skeleton {joints, bind_poses} in skeletons.iter() {
-        //     for Joint {name, parent_index, inverse_bind_pose} in joints {
-        //         println!("{}", name);
-        //     }
-        // }
 
         let containing_folder = textures;
         let mut materials = Vec::new();
@@ -138,21 +128,8 @@ impl Model {
         let diffuse_filename_re = regex::Regex::new(r".*/([^/]*\.png)").unwrap();
         for obj in objs.objects {
             let mut vertices: Vec<ModelVertex> = Vec::new();
-            // let mut indices: Vec<u32> = Vec::new();
-            let mut base_index : u32 = 0;
-            // for i in 0..obj.vertices.len() {
-            //     let v = obj.vertices[i];
-
-            //     vertices.push(ModelVertex {
-            //         position: [v.x as f32, v.y as f32, v.z as f32],
-            //         tex_coords: [0.0; 2],
-            //         normal: [0.0; 3],
-            //     });
-            // }
 
             for i in 0..obj.geometry.len() {
-                // let mut tex_vertex_indices: Vec<(usize, usize, usize)> = Vec::new();
-                // let mut normal_indices: Vec<(usize, usize, usize)> = Vec::new();
                 for j in 0..obj.geometry[i].mesh.len() {
                     let elt = &obj.geometry[i].mesh[j];
                     

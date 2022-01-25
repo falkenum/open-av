@@ -1,7 +1,4 @@
-use std::{iter, fmt::Display};
-
-use cgmath::prelude::*;
-use lazy_static::lazy_static;
+use std::{iter};
 use wgpu::{util::DeviceExt, include_wgsl};
 use winit::{
     event::*,
@@ -12,7 +9,7 @@ use winit::{
 mod model;
 mod texture;
 mod camera;
-use model::{DrawModel, Vertex, DrawLight};
+use model::{DrawModel, Vertex};
 use camera::CameraContext;
 
 
