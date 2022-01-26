@@ -19,6 +19,8 @@ winit = "0.26"
 regex = "1"
 collada = { path = "./external/piston_collada" }
 lazy_static = "1.4.0"
+rustfft = "6.0.1"
+rodio = "0.15.0"
 
 [build-dependencies]
 anyhow = "1.0"

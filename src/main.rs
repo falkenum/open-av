@@ -1,4 +1,6 @@
-use std::{iter};
+use std::{iter, time::Duration, sync::{Arc, Mutex}, ops::DerefMut};
+use cgmath::{InnerSpace, Rotation3, Zero};
+use rodio::Source;
 use wgpu::{util::DeviceExt, include_wgsl};
 use winit::{
     event::*,
@@ -9,6 +11,9 @@ use winit::{
 mod model;
 mod texture;
 mod camera;
+mod av;
+
+use av::{Av, AvSource, AvBuffer};
 use model::{DrawModel, Vertex};
 use camera::CameraContext;
 
@@ -71,7 +76,7 @@ fn create_render_pipeline(
     })
 }
 
-const NUM_INSTANCES_PER_ROW: u32 = 1;
+const NUM_INSTANCES_PER_ROW: u32 = 4;
 
 // main.rs
 #[repr(C)]
@@ -87,6 +92,7 @@ struct LightUniform {
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct Instance {
+    origin: [[f32; 4]; 4], 
     pose: [[f32; 4]; 4],
     normal: [[f32; 3]; 3],
 }
@@ -141,16 +147,36 @@ impl model::Vertex for Instance {
                 wgpu::VertexAttribute {
                     offset: mem::size_of::<[f32; 16]>() as wgpu::BufferAddress,
                     shader_location: 9,
-                    format: wgpu::VertexFormat::Float32x3,
+                    format: wgpu::VertexFormat::Float32x4,
                 },
                 wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 19]>() as wgpu::BufferAddress,
+                    offset: mem::size_of::<[f32; 20]>() as wgpu::BufferAddress,
                     shader_location: 10,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: mem::size_of::<[f32; 24]>() as wgpu::BufferAddress,
+                    shader_location: 11,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: mem::size_of::<[f32; 28]>() as wgpu::BufferAddress,
+                    shader_location: 12,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: mem::size_of::<[f32; 32]>() as wgpu::BufferAddress,
+                    shader_location: 13,
                     format: wgpu::VertexFormat::Float32x3,
                 },
                 wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 22]>() as wgpu::BufferAddress,
-                    shader_location: 11,
+                    offset: mem::size_of::<[f32; 35]>() as wgpu::BufferAddress,
+                    shader_location: 14,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: mem::size_of::<[f32; 38]>() as wgpu::BufferAddress,
+                    shader_location: 15,
                     format: wgpu::VertexFormat::Float32x3,
                 },
            ],
@@ -172,14 +198,15 @@ struct VisualContext {
     instances: Vec<Instance>,
     instance_buffer: wgpu::Buffer,
     depth_texture: texture::Texture,
-    // light_uniform: LightUniform,
-    // light_buffer: wgpu::Buffer,
+    light_uniform: LightUniform,
+    light_buffer: wgpu::Buffer,
     light_bind_group: wgpu::BindGroup,
     last_frame_update: std::time::Instant,
     animation_start: std::time::Instant,
+    av: Av
 }
 
-trait AvElement {
+trait VisualElement {
     fn on_resize(&mut self, _width: f32, _height: f32) {}
     fn on_input(&mut self, _event: &WindowEvent) -> bool { false }
     fn on_render(&mut self) {}
@@ -286,6 +313,10 @@ impl VisualContext {
                     // };
 
                     Instance { 
+                        origin: [[1., 0., 0., x],
+                               [0., 1., 0., 0.],
+                               [0., 0., 1., z],
+                               [0., 0., 0., 1.]],
                         pose: [[1., 0., 0., 0.],
                                [0., 1., 0., 0.],
                                [0., 0., 1., 0.],
@@ -412,13 +443,12 @@ impl VisualContext {
             instance_buffer,
             depth_texture,
 
-            // light_uniform,
-            // light_buffer,
+            light_uniform,
+            light_buffer,
             light_bind_group,
-            // light_render_pipeline,
-
             last_frame_update: std::time::Instant::now(),
             animation_start: std::time::Instant::now(),
+            av: av::Av::new(),
         }
     }
 
@@ -447,6 +477,16 @@ impl VisualContext {
         //     (cgmath::Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), cgmath::Deg(1.0))
         //         * old_position)
         //         .into();
+        // self.light_uniform.color = {
+        //     let mut new_color = self.light_uniform.color;
+        //     new_color[2] += 0.05;
+        //     if new_color[2] > 1.0 {
+        //         new_color[2] = 0.0;
+        //     }
+
+        //     new_color
+        // };
+
         let anim = self.obj_model.meshes[0].animation.clone().unwrap();
         // .poses;
         // let times = self.obj_model.meshes[0].animation.unwrap().times;
@@ -462,14 +502,13 @@ impl VisualContext {
             }
         }
 
-        for instance in self.instances.iter_mut() {
-            instance.pose = anim.transforms[i].pose;
-            instance.normal = anim.transforms[i].normal;
-            // instance.pose[1][3] += 0.1;
-        }
+        // for instance in self.instances.iter_mut() {
+        //     instance.pose = anim.transforms[i].pose;
+        //     instance.normal = anim.transforms[i].normal;
+        // }
         self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
         self.queue.write_buffer(&self.camera_context.buffer, 0, bytemuck::cast_slice(&[self.camera_context.uniform]));
-        // self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
+        self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -492,9 +531,9 @@ impl VisualContext {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
                             a: 1.0,
                         }),
                         store: true,
@@ -534,6 +573,8 @@ impl VisualContext {
 
         Ok(())
     }
+
+
 }
 
 fn main() {
@@ -547,9 +588,16 @@ fn main() {
 
     // State::new uses async code, so we're going to wait for it to finish
     let mut state = pollster::block_on(VisualContext::new(&window));
+    let source_file = "C:\\Users\\sjfal\\Downloads\\synth-loop.wav";
+
+    let av = Av::new();
+    let source =  AvSource::new(source_file, Arc::clone(&av.target_buf));
+    av.play(source);
+
+
     // let mut last_model_update = std::time::Instant::now();
     event_loop.run(move |event, _, control_flow| {
-        if state.last_frame_update.elapsed() > std::time::Duration::from_millis(1000) / 30 {
+        if state.last_frame_update.elapsed() > std::time::Duration::from_millis(1000) / 60 {
             state.last_frame_update = std::time::Instant::now();
 
             state.update();

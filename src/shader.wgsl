@@ -12,13 +12,17 @@ struct VertexInput {
     [[location(2)]] normal: vec3<f32>;
 };
 struct InstanceInput {
-    [[location(5)]] pose_matrix_0: vec4<f32>;
-    [[location(6)]] pose_matrix_1: vec4<f32>;
-    [[location(7)]] pose_matrix_2: vec4<f32>;
-    [[location(8)]] pose_matrix_3: vec4<f32>;
-    [[location(9)]] normal_matrix_0: vec3<f32>;
-    [[location(10)]] normal_matrix_1: vec3<f32>;
-    [[location(11)]] normal_matrix_2: vec3<f32>;
+    [[location(5)]] origin_matrix_0: vec4<f32>;
+    [[location(6)]] origin_matrix_1: vec4<f32>;
+    [[location(7)]] origin_matrix_2: vec4<f32>;
+    [[location(8)]] origin_matrix_3: vec4<f32>;
+    [[location(9)]] pose_matrix_0: vec4<f32>;
+    [[location(10)]] pose_matrix_1: vec4<f32>;
+    [[location(11)]] pose_matrix_2: vec4<f32>;
+    [[location(12)]] pose_matrix_3: vec4<f32>;
+    [[location(13)]] normal_matrix_0: vec3<f32>;
+    [[location(14)]] normal_matrix_1: vec3<f32>;
+    [[location(15)]] normal_matrix_2: vec3<f32>;
 };
 
 struct VertexOutput {
@@ -40,7 +44,12 @@ fn vs_main(
     model: VertexInput,
     instance: InstanceInput,
 ) -> VertexOutput {
-    // column major matrices (I think; it didn't work when I wasn't transposing these first)
+    let instance_origin_matrix = mat4x4<f32>(
+        instance.origin_matrix_0,
+        instance.origin_matrix_1,
+        instance.origin_matrix_2,
+        instance.origin_matrix_3,
+    );
     let instance_pose_matrix = mat4x4<f32>(
         instance.pose_matrix_0,
         instance.pose_matrix_1,
@@ -56,7 +65,7 @@ fn vs_main(
     out.tex_coords = model.tex_coords;
     let normal: vec3<f32> = model.normal * instance_normal_matrix;
     out.world_normal = normal.xyz;
-    let transformed_position: vec4<f32> = vec4<f32>(model.position, 1.0) * instance_pose_matrix;
+    let transformed_position: vec4<f32> = (vec4<f32>(model.position, 1.0) * instance_pose_matrix) * instance_origin_matrix;
     out.world_position = transformed_position.xyz;
     out.clip_position = camera.view_proj * transformed_position;
     return out;
