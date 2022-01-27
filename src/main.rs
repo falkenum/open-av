@@ -76,7 +76,8 @@ fn create_render_pipeline(
     })
 }
 
-const NUM_INSTANCES_PER_ROW: u32 = 4;
+// const NUM_INSTANCES_PER_ROW: u32 = 4;
+const NUM_INSTANCES: u32 = 32;
 
 // main.rs
 #[repr(C)]
@@ -295,39 +296,23 @@ impl Context {
 
 
         const SPACE_BETWEEN: f32 = 3.0;
-        let instances = (0..NUM_INSTANCES_PER_ROW)
-            .flat_map(|z| {
-                (0..NUM_INSTANCES_PER_ROW).map(move |x| {
-                    let x = SPACE_BETWEEN * (x as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
-                    let z = SPACE_BETWEEN * (z as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
 
-                    // let position = cgmath::Vector3 { x, y: 0.0, z };
-
-                    // let rotation = if position.is_zero() {
-                    //     cgmath::Quaternion::from_axis_angle(
-                    //         cgmath::Vector3::unit_z(),
-                    //         cgmath::Deg(0.0),
-                    //     )
-                    // } else {
-                    //     cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
-                    // };
-
-                    Instance { 
-                        origin: [[1., 0., 0., x],
-                               [0., 1., 0., 0.],
-                               [0., 0., 1., z],
-                               [0., 0., 0., 1.]],
-                        pose: [[1., 0., 0., 0.],
-                               [0., 1., 0., 0.],
-                               [0., 0., 1., 0.],
-                               [0., 0., 0., 1.]],
-                        normal: [[1., 0., 0.],
-                                 [0., 1., 0.],
-                                 [0., 0., 1.]],
-                    }
-                })
-            })
-            .collect::<Vec<_>>();
+        let instances = (0..NUM_INSTANCES).map(|i| {
+            let x = i as f32 * SPACE_BETWEEN - NUM_INSTANCES as f32 / 2.0 * SPACE_BETWEEN;
+            Instance { 
+                origin: [[1., 0., 0., x],
+                        [0., 1., 0., 0.],
+                        [0., 0., 1., 0.],
+                        [0., 0., 0., 1.]],
+                pose: [[1., 0., 0., 0.],
+                        [0., 1., 0., 0.],
+                        [0., 0., 1., 0.],
+                        [0., 0., 0., 1.]],
+                normal: [[1., 0., 0.],
+                            [0., 1., 0.],
+                            [0., 0., 1.]],
+            }
+        }).collect::<Vec<_>>();
 
         let light_uniform = LightUniform {
             position: [2.0, 2.0, 2.0],
@@ -429,10 +414,10 @@ impl Context {
         //         shader,
         //     )
         //
-        let source_file = "C:\\Users\\sjfal\\Downloads\\synth-loop.wav";
-        let sample_idx = Arc::from(Mutex::from(0usize));
-        let source =  AvSource::new(source_file, Arc::clone(&sample_idx));
-        let mut av = Av::new(Arc::clone(&sample_idx));
+        let source_file = "C:\\Users\\sjfal\\Downloads\\enter-sandman.wav";
+        let frame_idx = Arc::from(Mutex::from(0usize));
+        let source =  AvSource::new(source_file, Arc::clone(&frame_idx));
+        let mut av = Av::new(Arc::clone(&frame_idx));
         av.process(source_file);
 
         av.stream_handle.play_raw(source).unwrap();
@@ -509,11 +494,14 @@ impl Context {
         //     }
         // }
 
-        // {
-        //     let mut lock = self.av.target_buf.lock().unwrap();
-        //     let buf = lock.deref_mut();
-        //     self.instances[0].pose[0][3] = buf[100];
-        // }
+        let frame_idx = {
+            let mut lock = self.av.frame_idx.lock().unwrap();
+            lock.deref_mut().clone()
+
+        };
+        for i in 0..self.instances.len() {
+            self.instances[i].pose[1][3] = 5.0 * self.av.processed_data.instance_intensity[frame_idx][i];
+        }
         // for instance in self.instances.iter_mut() {
         //     instance.pose = anim.transforms[i].pose;
         //     instance.normal = anim.transforms[i].normal;

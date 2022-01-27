@@ -23,7 +23,7 @@ pub struct CameraContext {
 impl CameraContext {
     pub fn new(device: &wgpu::Device, aspect: f32) -> Self {
         let camera = Camera {
-            eye: (0.0, 5.0, -10.0).into(),
+            eye: (0.0, 10.0, -20.0).into(),
             target: (0.0, 0.0, 0.0).into(),
             up: cgmath::Vector3::unit_y(),
             aspect: aspect,

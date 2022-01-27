@@ -1,3 +1,4 @@
+use cgmath::num_traits::pow;
 use lazy_static::__Deref;
 use rodio::OutputStreamHandle;
 use rodio::{Decoder, OutputStream, source::Source, source::Repeat};
@@ -12,9 +13,12 @@ use std::time::Duration;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use crate::NUM_INSTANCES;
+
 const FFT_SIZE: usize = 1024;
-const HOP_SIZE: usize = 256;
+const HOP_SIZE: usize = 512;
 const MAX_DB: f32 = 60.0;
+const MIN_DB: f32 = 10.0;
 const MAX_FREQ: usize = 5000;
 
 // trait AvProfile {
@@ -30,7 +34,7 @@ const MAX_FREQ: usize = 5000;
 //     fn new(sample_rate: usize) -> Blue {
 //         Blue {
 //             dominant_bin_per_led: [-1i32; NUM_LEDS],
-//             sample_rate: sample_rate,
+//             sample_rate,
 //         }
 //     }
 // }
@@ -57,7 +61,7 @@ const MAX_FREQ: usize = 5000;
 // }
 
 pub struct Av {
-    pub sample_idx: SharedSampleIndex,
+    pub frame_idx: SharedFrameIndex,
     pub stream_handle: OutputStreamHandle,
     pub processed_data: ProcessedData,
     _stream: OutputStream,
@@ -68,7 +72,7 @@ pub struct Av {
 }
 
 impl Av {
-    pub fn new(sample_idx: SharedSampleIndex) -> Self {
+    pub fn new(sample_idx: SharedFrameIndex) -> Self {
         let (_stream, stream_handle) = OutputStream::try_default().unwrap();
         Self {
             stream_handle,
@@ -76,9 +80,10 @@ impl Av {
             fft_buffer: [Complex32::from(0.0f32); FFT_SIZE],
             fft_scratch: [Complex32::from(0.0f32); FFT_SIZE],
             fft_handle: Radix4::new(FFT_SIZE, FftDirection::Forward),
-            sample_idx,
+            frame_idx: sample_idx,
             processed_data: ProcessedData {
                 stft_output_db: Vec::new(),
+                instance_intensity: Vec::new(),
             }
         }
     }
@@ -89,14 +94,20 @@ impl Av {
         ).unwrap();
 
         let channels = sample_iter.channels();
+        let sample_rate = sample_iter.sample_rate();
         let sample_buf: Vec<i16> = sample_iter.collect();
         let num_samples = sample_buf.len();
 
         let a0 = 25.0 / 46.0;
-        let mut stft_output_db: Vec<[f32; FFT_SIZE]> = Vec::new();
+        let mut processed_data = ProcessedData {
+            stft_output_db: Vec::new(),
+            instance_intensity: Vec::new(),
+        };
 
         let mut offset = 0;
-        while offset < (num_samples / channels as usize - FFT_SIZE) {
+        let start_time = std::time::Instant::now();
+        // while offset < (num_samples as usize - FFT_SIZE * channels as usize) {
+        while offset < sample_rate as usize * 60 {// 60 seconds of data
             for i in 0..FFT_SIZE {
                 // let sample_idx = i / channels as usize;
                 let sample = match channels {
@@ -111,42 +122,68 @@ impl Av {
 
             self.fft_handle.process_with_scratch(&mut self.fft_buffer, &mut self.fft_scratch);
 
-            let mut result = [0.0f32; FFT_SIZE];
+            let mut fft_mag_db = [0.0f32; FFT_SIZE];
             for i in 0..FFT_SIZE {
-                result[i] = self.fft_buffer[i].norm();
+                fft_mag_db[i] = 20.0 * self.fft_buffer[i].norm().log10();
+                if fft_mag_db[i] > MAX_DB {
+                    fft_mag_db[i] = MAX_DB;
+                }
             }
-            stft_output_db.push(result);
 
             offset += HOP_SIZE;
+
+            let max_bin = FFT_SIZE * MAX_FREQ / sample_rate as usize;
+            let bins_per_instance = max_bin as f32 / crate::NUM_INSTANCES as f32;
+
+            let mut dominant_bin_per_instance = [-1i32; crate::NUM_INSTANCES as usize];
+
+            for i in 0..max_bin {
+                let instance_num = (i as f32 / max_bin as f32 * crate::NUM_INSTANCES as f32) as usize;
+
+                if dominant_bin_per_instance[instance_num] == -1 || fft_mag_db[i] > fft_mag_db[dominant_bin_per_instance[instance_num] as usize] {
+                    dominant_bin_per_instance[instance_num] = i as i32;
+                }
+            }
+
+            let mut instance_intensity = [0.0f32; crate::NUM_INSTANCES as usize];
+            for i in 0..NUM_INSTANCES as usize {
+                instance_intensity[i] = fft_mag_db[dominant_bin_per_instance[i] as usize] / MAX_DB
+            }
+
+            // processed_data.stft_output_db.push(fft_mag_db);
+            processed_data.instance_intensity.push(instance_intensity);
         }
-        self.processed_data = ProcessedData {
-            stft_output_db
-        };
+        let elapsed = start_time.elapsed().as_millis();
+        let mb = std::mem::size_of::<[f32;FFT_SIZE]>() * processed_data.instance_intensity.len() / pow(2, 20);
+        println!("processing took {} ms and result takes up {} MB", elapsed, mb);
+
+        self.processed_data = processed_data;
     }
 }
 
-pub type SharedSampleIndex = Arc<Mutex<usize>>;
+pub type SharedFrameIndex = Arc<Mutex<usize>>;
 
 pub struct ProcessedData {
-    stft_output_db: Vec<[f32; FFT_SIZE]>
+    pub stft_output_db: Vec<[f32; FFT_SIZE]>,
+    pub instance_intensity: Vec<[f32; crate::NUM_INSTANCES as usize]>,
 }
 
 pub struct AvSource {
     current_sample_index: usize,
     sample_idx_update_count: usize,
-    shared_sample_index: SharedSampleIndex,
+    shared_frame_index: SharedFrameIndex,
     sample_buffer: Repeat<Decoder<BufReader<File>>>,
 }
 
 impl AvSource {
-    pub fn new(filename: &str, shared_sample_index: SharedSampleIndex) -> Self {
+    pub fn new(filename: &str, shared_sample_index: SharedFrameIndex) -> Self {
         let sample_buffer = Decoder::new(
             BufReader::new(File::open(filename).unwrap())
         ).unwrap().repeat_infinite();
 
         Self {
-            shared_sample_index,
-            sample_idx_update_count: 400,
+            shared_frame_index: shared_sample_index,
+            sample_idx_update_count: HOP_SIZE,
             current_sample_index: 0,
             sample_buffer,
         }
@@ -162,7 +199,7 @@ impl Iterator for AvSource {
         // self.sample_queue.pop_front();
         // self.sample_queue.push_back(sample);
         if self.current_sample_index % self.sample_idx_update_count == 0 {
-            *self.shared_sample_index.lock().unwrap().deref_mut() = self.current_sample_index;
+            *self.shared_frame_index.lock().unwrap().deref_mut() = self.current_sample_index / self.sample_idx_update_count;
         }
         // self.sigproc.run(self.sample_queue.iter().cloned());
         
