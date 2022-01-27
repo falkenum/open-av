@@ -13,7 +13,7 @@ mod texture;
 mod camera;
 mod av;
 
-use av::{Av, AvSource, AvBuffer};
+use av::{Av, AvSource};
 use model::{DrawModel, Vertex};
 use camera::CameraContext;
 
@@ -185,7 +185,7 @@ impl model::Vertex for Instance {
 }
 
 
-struct VisualContext {
+struct Context {
     surface: wgpu::Surface,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -213,7 +213,7 @@ trait VisualElement {
     fn update(&mut self) {}
 }
 
-impl VisualContext {
+impl Context {
     async fn new(window: &Window) -> Self {
         let size = window.inner_size();
 
@@ -428,7 +428,14 @@ impl VisualContext {
         //         &[model::ModelVertex::desc()],
         //         shader,
         //     )
-        // };
+        //
+        let source_file = "C:\\Users\\sjfal\\Downloads\\synth-loop.wav";
+        let sample_idx = Arc::from(Mutex::from(0usize));
+        let source =  AvSource::new(source_file, Arc::clone(&sample_idx));
+        let mut av = Av::new(Arc::clone(&sample_idx));
+        av.process(source_file);
+
+        av.stream_handle.play_raw(source).unwrap();
 
         Self {
             surface,
@@ -448,7 +455,7 @@ impl VisualContext {
             light_bind_group,
             last_frame_update: std::time::Instant::now(),
             animation_start: std::time::Instant::now(),
-            av: av::Av::new(),
+            av,
         }
     }
 
@@ -487,21 +494,26 @@ impl VisualContext {
         //     new_color
         // };
 
-        let anim = self.obj_model.meshes[0].animation.clone().unwrap();
-        // .poses;
-        // let times = self.obj_model.meshes[0].animation.unwrap().times;
-        // let elapsed = self.last_frame_update.elapsed();
-        let now = std::time::Instant::now();
-        let mut i = 0;
-        while now - self.animation_start > std::time::Duration::from_millis((anim.times[i] * 1000.0) as u64) {
-            i += 1;
+        // let anim = self.obj_model.meshes[0].animation.clone().unwrap();
+        // // .poses;
+        // // let times = self.obj_model.meshes[0].animation.unwrap().times;
+        // // let elapsed = self.last_frame_update.elapsed();
+        // let now = std::time::Instant::now();
+        // let mut i = 0;
+        // while now - self.animation_start > std::time::Duration::from_millis((anim.times[i] * 1000.0) as u64) {
+        //     i += 1;
 
-            if i >= anim.times.len() {
-                self.animation_start = now;
-                i = 0;
-            }
-        }
+        //     if i >= anim.times.len() {
+        //         self.animation_start = now;
+        //         i = 0;
+        //     }
+        // }
 
+        // {
+        //     let mut lock = self.av.target_buf.lock().unwrap();
+        //     let buf = lock.deref_mut();
+        //     self.instances[0].pose[0][3] = buf[100];
+        // }
         // for instance in self.instances.iter_mut() {
         //     instance.pose = anim.transforms[i].pose;
         //     instance.normal = anim.transforms[i].normal;
@@ -586,14 +598,8 @@ fn main() {
         .build(&event_loop)
         .unwrap();
 
-    // State::new uses async code, so we're going to wait for it to finish
-    let mut state = pollster::block_on(VisualContext::new(&window));
-    let source_file = "C:\\Users\\sjfal\\Downloads\\synth-loop.wav";
 
-    let av = Av::new();
-    let source =  AvSource::new(source_file, Arc::clone(&av.target_buf));
-    av.play(source);
-
+    let mut state = pollster::block_on(Context::new(&window));
 
     // let mut last_model_update = std::time::Instant::now();
     event_loop.run(move |event, _, control_flow| {

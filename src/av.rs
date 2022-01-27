@@ -1,25 +1,19 @@
+use lazy_static::__Deref;
 use rodio::OutputStreamHandle;
-use rodio::source::PeriodicAccess;
 use rodio::{Decoder, OutputStream, source::Source, source::Repeat};
 use rustfft::{Fft, FftDirection, num_complex::Complex32, algorithm::Radix4};
 
-use std::borrow::{BorrowMut, Borrow};
-use std::collections::vec_deque::IterMut;
+use core::num;
 use std::io::BufReader;
 use std::fs::File;
 use std::f32::consts::PI;
 use std::ops::DerefMut;
-use std::time::{SystemTime, Duration};
-use std::collections::{VecDeque};
-use std::vec::Vec;
-use std::sync::{Arc, Mutex, RwLock};
-use std::boxed::Box;
+use std::time::Duration;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
-pub const FFT_SIZE: usize = 1024;
-const WINDOW_WIDTH: u32 = 3600;
-const WINDOW_HEIGHT: u32 = 400;
-const NUM_LEDS: usize = 64;
-
+const FFT_SIZE: usize = 1024;
+const HOP_SIZE: usize = 256;
 const MAX_DB: f32 = 60.0;
 const MAX_FREQ: usize = 5000;
 
@@ -63,86 +57,98 @@ const MAX_FREQ: usize = 5000;
 // }
 
 pub struct Av {
-    // profile: Box<dyn AvProfile>,
-    stream_handle: OutputStreamHandle,
+    pub sample_idx: SharedSampleIndex,
+    pub stream_handle: OutputStreamHandle,
+    pub processed_data: ProcessedData,
     _stream: OutputStream,
-    pub target_buf: AvBuffer,
+
+    fft_buffer: [Complex32; FFT_SIZE],
+    fft_scratch: [Complex32; FFT_SIZE],
+    fft_handle: Radix4<f32>,
 }
 
 impl Av {
-    pub fn new() -> Self {
-        // let mut sample_queue = VecDeque::new();
-        // sample_queue.resize(FFT_SIZE, 0);
-
+    pub fn new(sample_idx: SharedSampleIndex) -> Self {
         let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-
         Self {
             stream_handle,
             _stream,
-            target_buf: Arc::from(Mutex::from([0.0; FFT_SIZE])),
-        }
-    }
-    pub fn play(&self , source: AvSource) {
-        self.stream_handle.play_raw(source).unwrap();
-    }
-}
-
-struct SignalProcessor {
-    fft_buffer: [Complex32; FFT_SIZE],
-    fft_scratch: [Complex32; FFT_SIZE],
-    fft: Radix4<f32>,
-}
-
-impl SignalProcessor {
-    fn new() -> Self {
-        Self {
             fft_buffer: [Complex32::from(0.0f32); FFT_SIZE],
             fft_scratch: [Complex32::from(0.0f32); FFT_SIZE],
-            fft: Radix4::new(FFT_SIZE, FftDirection::Forward),
+            fft_handle: Radix4::new(FFT_SIZE, FftDirection::Forward),
+            sample_idx,
+            processed_data: ProcessedData {
+                stft_output_db: Vec::new(),
+            }
         }
     }
 
-    fn run<B>(&mut self, mut sample_it: B, target_buf: &mut [f32; FFT_SIZE]) where B: Iterator<Item=f32> {
-        // assert_eq!(sample_buffer.len(), FFT_SIZE);
-        for i in 0..FFT_SIZE {
-            let a0 = 25.0 / 46.0;
+    pub fn process(&mut self, filename: &str) {
+        let sample_iter = Decoder::new(
+            BufReader::new(File::open(filename).unwrap())
+        ).unwrap();
 
-            let val = sample_it.next().unwrap().clone();
-            let windowed_val = val * (a0 - (1.0 - a0) * (2.0 * PI * i as f32 / FFT_SIZE as f32).cos());
-            self.fft_buffer[i] = Complex32::from(windowed_val);
+        let channels = sample_iter.channels();
+        let sample_buf: Vec<i16> = sample_iter.collect();
+        let num_samples = sample_buf.len();
+
+        let a0 = 25.0 / 46.0;
+        let mut stft_output_db: Vec<[f32; FFT_SIZE]> = Vec::new();
+
+        let mut offset = 0;
+        while offset < (num_samples / channels as usize - FFT_SIZE) {
+            for i in 0..FFT_SIZE {
+                // let sample_idx = i / channels as usize;
+                let sample = match channels {
+                    1 => sample_buf[offset + i] as f32 / i16::MAX as f32,
+                    2 => (sample_buf[offset + i] as f32 + sample_buf[offset + i + 1] as f32) as f32 / 2.0 / i16::MAX as f32,
+                    _ => panic!(),
+                };
+
+                let windowed_val = sample * (a0 - (1.0 - a0) * (2.0 * PI * i as f32 / FFT_SIZE as f32).cos());
+                self.fft_buffer[i] = Complex32::from(windowed_val);
+            }
+
+            self.fft_handle.process_with_scratch(&mut self.fft_buffer, &mut self.fft_scratch);
+
+            let mut result = [0.0f32; FFT_SIZE];
+            for i in 0..FFT_SIZE {
+                result[i] = self.fft_buffer[i].norm();
+            }
+            stft_output_db.push(result);
+
+            offset += HOP_SIZE;
         }
-
-        self.fft.process_with_scratch(&mut self.fft_buffer, &mut self.fft_scratch);
-
-        for i in 0..FFT_SIZE {
-            target_buf[i] = 20.0*self.fft_buffer[i].norm().log10();
-        }
-
-        // return &self.output;
+        self.processed_data = ProcessedData {
+            stft_output_db
+        };
     }
 }
-pub type AvBuffer = Arc<Mutex<[f32; FFT_SIZE]>>;
+
+pub type SharedSampleIndex = Arc<Mutex<usize>>;
+
+pub struct ProcessedData {
+    stft_output_db: Vec<[f32; FFT_SIZE]>
+}
+
 pub struct AvSource {
-    source_buffer: Repeat<Decoder<BufReader<File>>>, 
-    sample_queue: VecDeque<f32>,
-    sigproc: SignalProcessor,
-    last_processed: std::time::Instant,
-    target_buf: AvBuffer,
+    current_sample_index: usize,
+    sample_idx_update_count: usize,
+    shared_sample_index: SharedSampleIndex,
+    sample_buffer: Repeat<Decoder<BufReader<File>>>,
 }
 
 impl AvSource {
-    pub fn new(source_file: &str, target_buf: AvBuffer) -> Self {
-        let source_buffer = Decoder::new(
-            BufReader::new(File::open(source_file).unwrap())
+    pub fn new(filename: &str, shared_sample_index: SharedSampleIndex) -> Self {
+        let sample_buffer = Decoder::new(
+            BufReader::new(File::open(filename).unwrap())
         ).unwrap().repeat_infinite();
-        let mut sample_queue = VecDeque::new();
-        sample_queue.resize(FFT_SIZE, 0.0);
+
         Self {
-            source_buffer,
-            sample_queue,
-            sigproc: SignalProcessor::new(),
-            last_processed: std::time::Instant::now(),
-            target_buf,
+            shared_sample_index,
+            sample_idx_update_count: 400,
+            current_sample_index: 0,
+            sample_buffer,
         }
     }
 }
@@ -152,26 +158,22 @@ impl Iterator for AvSource {
     type Item = f32;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let sample = match self.source_buffer.channels() {
-            1 => self.source_buffer.next().unwrap() as f32,
-            2 => (self.source_buffer.next().unwrap() as f32 + self.source_buffer.next().unwrap() as f32) / 2.0,
+
+        // self.sample_queue.pop_front();
+        // self.sample_queue.push_back(sample);
+        if self.current_sample_index % self.sample_idx_update_count == 0 {
+            *self.shared_sample_index.lock().unwrap().deref_mut() = self.current_sample_index;
+        }
+        // self.sigproc.run(self.sample_queue.iter().cloned());
+        
+        self.current_sample_index += 1;
+
+        let sample = match self.sample_buffer.channels() {
+            1 => self.sample_buffer.next().unwrap() as f32,
+            2 => (self.sample_buffer.next().unwrap() as f32 + self.sample_buffer.next().unwrap() as f32) / 2.0,
             _ => panic!(),
         } / i16::MAX as f32;
 
-        self.sample_queue.pop_front();
-        self.sample_queue.push_back(sample);
-        if self.last_processed.elapsed() > Duration::from_nanos(1_000_000_000 / 60) {
-            let mut lock = self.target_buf.lock().unwrap();
-            let target_buf = lock.deref_mut();
-            self.sigproc.run(self.sample_queue.iter().cloned(), target_buf);
-            // for i in 0..buf.len() {
-            //     buf[i] = source_buf[i];
-            // }
-
-
-            self.last_processed = std::time::Instant::now();
-        }
-        
         Some(sample)
     }
 }
@@ -186,7 +188,7 @@ impl Source for AvSource {
     }
 
     fn sample_rate(&self) -> u32 {
-        self.source_buffer.sample_rate()
+        self.sample_buffer.sample_rate()
     }
 
     fn total_duration(&self) -> Option<Duration> {
