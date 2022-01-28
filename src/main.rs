@@ -414,7 +414,7 @@ impl Context {
         //         shader,
         //     )
         //
-        let source_file = "C:\\Users\\sjfal\\Downloads\\enter-sandman.wav";
+        let source_file = "C:\\Users\\sjfal\\repos\\open-av\\res\\enter-sandman.wav";
         let frame_idx = Arc::from(Mutex::from(0usize));
         let source =  AvSource::new(source_file, Arc::clone(&frame_idx));
         let mut av = Av::new(Arc::clone(&frame_idx));
