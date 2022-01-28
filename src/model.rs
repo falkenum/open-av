@@ -100,7 +100,7 @@ impl Model {
         layout: &wgpu::BindGroupLayout,
         path: P,
     ) -> Result<Self> {
-        let textures = path.as_ref().parent().unwrap().join("textures");
+        let textures = path.as_ref().parent().unwrap().parent().unwrap().join("textures");
         let document = match collada::document::ColladaDocument::from_path(path.as_ref()) {
             std::result::Result::Ok(doc) => anyhow::Result::Ok(doc),
             std::result::Result::Err(s) => anyhow::Result::Err(OpenFileError(s)),

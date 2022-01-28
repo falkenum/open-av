@@ -361,7 +361,10 @@ impl Context {
 
 
 
-        let path = std::env::current_dir().unwrap().as_path().join("res").join("cube.dae");
+        let path = std::env::current_dir().unwrap()
+            .as_path().join("res")
+            .join("blender")
+            .join("cube.dae");
         let obj_model = model::Model::load(
             &device,
             &queue,
@@ -414,7 +417,10 @@ impl Context {
         //         shader,
         //     )
         //
-        let source_file = "C:\\Users\\sjfal\\repos\\open-av\\res\\enter-sandman.wav";
+        // let source_file = "C:\\Users\\sjfal\\repos\\open-av\\res\\";
+        let source_path = std::env::current_dir()
+            .unwrap().as_path().join("res").join("sounds").join("enter-sandman.wav");
+        let source_file = source_path.to_str().unwrap();
         let frame_idx = Arc::from(Mutex::from(0usize));
         let source =  AvSource::new(source_file, Arc::clone(&frame_idx));
         let mut av = Av::new(Arc::clone(&frame_idx));
