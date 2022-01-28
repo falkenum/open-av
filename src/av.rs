@@ -16,10 +16,11 @@ use std::sync::{Arc, Mutex};
 use crate::NUM_INSTANCES;
 
 const FFT_SIZE: usize = 1024;
-const HOP_SIZE: usize = 512;
+const WINDOW_SIZE: usize = 512;
+const HOP_SIZE: usize = 256;
 const MAX_DB: f32 = 60.0;
 const MIN_DB: f32 = 10.0;
-const MAX_FREQ: usize = 5000;
+const MAX_FREQ: usize = 7000;
 
 // trait AvProfile {
 //     fn set_led_colors(&mut self, led_colors: &mut [Color], fft_mag_db: &[f32]);
@@ -108,7 +109,7 @@ impl Av {
         let start_time = std::time::Instant::now();
         // while offset < (num_samples as usize - FFT_SIZE * channels as usize) {
         while offset < sample_rate as usize * 60 {// 60 seconds of data
-            for i in 0..FFT_SIZE {
+            for i in 0..WINDOW_SIZE {
                 // let sample_idx = i / channels as usize;
                 let sample = match channels {
                     1 => sample_buf[offset + i] as f32 / i16::MAX as f32,
@@ -116,8 +117,12 @@ impl Av {
                     _ => panic!(),
                 };
 
-                let windowed_val = sample * (a0 - (1.0 - a0) * (2.0 * PI * i as f32 / FFT_SIZE as f32).cos());
+                let windowed_val = sample * (a0 - (1.0 - a0) * (2.0 * PI * i as f32 / WINDOW_SIZE as f32).cos());
                 self.fft_buffer[i] = Complex32::from(windowed_val);
+            }
+
+            for i in WINDOW_SIZE..FFT_SIZE {
+                self.fft_buffer[i] = Complex32::from(0.0);
             }
 
             self.fft_handle.process_with_scratch(&mut self.fft_buffer, &mut self.fft_scratch);
