@@ -4,6 +4,7 @@ use rustfft::{Fft, FftDirection, num_complex::Complex32, algorithm::Radix4};
 use plotters::prelude::*;
 use serde::Serialize;
 use serde::ser::SerializeSeq;
+use bincode::Options;
 
 use std::io::{BufReader, Write};
 use std::fs::File;
@@ -109,7 +110,7 @@ impl Av {
             instance_intensity: Vec::new(),
         };
 
-        processed_data.plot();
+        // processed_data.plot();
 
         let mut offset = 0;
         let start_time = std::time::Instant::now();
@@ -171,11 +172,13 @@ impl Av {
         let out_path = std::env::current_dir().unwrap()
             .as_path().join("res")
             .join("sounds")
-            .join(std::path::Path::new(filename).with_extension("png"));
+            .join(std::path::Path::new(filename).with_extension("bin"));
 
         // pollster::block_on(processed_data.plot());
-        // let mut out_fd = std::fs::File::create(out_path).unwrap();
-        // out_fd.write(bincode::serialize(&processed_data).unwrap().as_slice());
+        let mut out_fd = std::fs::File::create(out_path).unwrap();
+        let bytes = bincode::DefaultOptions::new()
+            .with_big_endian().serialize(&processed_data).unwrap();
+        out_fd.write(bytes.as_slice()).unwrap();
 
         self.processed_data = processed_data;
 
@@ -209,17 +212,23 @@ pub struct ProcessedData {
 }
 
 impl ProcessedData {
-    fn plot(&self) {
-        let bytes = bincode::serialize(self).unwrap();
-        let client = reqwest::blocking::Client::new();
-        let response = client
-            .post("http://127.0.0.1:8080")
-            .body("hello from rust\n")
-            .send()
-            .unwrap();
+    fn write_to_file(&self) {
+
+        // serialize with network byte order
+        // let bytes = bincode::DefaultOptions::new()
+        //     .with_big_endian().serialize(self).unwrap();
+        
+        
+
+        // let client = reqwest::blocking::Client::new();
+        // let response = client
+        //     .post("http://127.0.0.1:8080")
+        //     .body(bytes)
+        //     .send()
+        //     .unwrap();
 
         // let response = reqwest::blocking::get("http://0.0.0.0:8080")
-        println!("{:?}", response);
+        // println!("{:?}", response);
 
 
         // stream.read(&mut [0; 128])?;
@@ -261,25 +270,26 @@ impl Serialize for ProcessedData {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer {
-        let mut seq = serializer.serialize_seq(Some(1 + FFT_SIZE*self.stft_output_db.len()))?;
-        seq.serialize_element(&self.sample_rate)?;
+        serializer.serialize_u32(self.sample_rate)
+        // let mut seq = serializer.serialize_seq(Some(1 + FFT_SIZE*self.stft_output_db.len()))?;
+        // seq.serialize_element(&self.sample_rate)?;
         // for buf in self.sample_buffers.as_slice() {
         //     for elt in buf {
         //         seq.serialize_element(&elt)?;
         //     }
         // }
-        for buf in self.stft_output_db.as_slice() {
-            for elt in buf {
-                seq.serialize_element(elt)?;
-            }
-        }
+        // for buf in self.stft_output_db.as_slice() {
+        //     for elt in buf {
+        //         seq.serialize_element(elt)?;
+        //     }
+        // }
 
         // for buf in self.instance_intensity.as_slice() {
         //     for elt in buf {
         //         seq.serialize_element(elt)?;
         //     }
         // }
-        seq.end()
+        // seq.end()
     }
 }
 

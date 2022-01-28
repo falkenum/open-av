@@ -1,15 +1,8 @@
-from http import server
 
-class Handler(server.BaseHTTPRequestHandler):
-    def do_POST(self):
-        print(f"data: {self.rfile.readline()}")
-        self.send_response(server.http.HTTPStatus.OK)
-        self.end_headers()
+import struct
 
-    def do_GET(self):
-        self.send_response(server.http.HTTPStatus.OK)
-        self.end_headers()
-
-s = server.HTTPServer(("0.0.0.0", 8080), Handler)
-
-s.serve_forever()
+with open(".\\res\\sounds\\enter-sandman.bin", mode="rb") as f:
+    input = f.read(4)
+    print(input)
+    sample_rate = struct.unpack(">I", input)
+    print(sample_rate)
