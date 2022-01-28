@@ -1,16 +1,16 @@
-use cgmath::num_traits::pow;
-use lazy_static::__Deref;
 use rodio::OutputStreamHandle;
 use rodio::{Decoder, OutputStream, source::Source, source::Repeat};
 use rustfft::{Fft, FftDirection, num_complex::Complex32, algorithm::Radix4};
+use plotters::prelude::*;
+use serde::Serialize;
+use serde::ser::SerializeSeq;
 
-use core::num;
-use std::io::BufReader;
+use std::io::{BufReader, Write};
 use std::fs::File;
 use std::f32::consts::PI;
+use std::net::TcpStream;
 use std::ops::DerefMut;
 use std::time::Duration;
-use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use crate::NUM_INSTANCES;
@@ -83,6 +83,8 @@ impl Av {
             fft_handle: Radix4::new(FFT_SIZE, FftDirection::Forward),
             frame_idx: sample_idx,
             processed_data: ProcessedData {
+                sample_rate: 0,
+                // sample_buffers: Vec::new(),
                 stft_output_db: Vec::new(),
                 instance_intensity: Vec::new(),
             }
@@ -101,14 +103,18 @@ impl Av {
 
         let a0 = 25.0 / 46.0;
         let mut processed_data = ProcessedData {
+            sample_rate,
+            // sample_buffers: Vec::new(),
             stft_output_db: Vec::new(),
             instance_intensity: Vec::new(),
         };
 
+        processed_data.plot();
+
         let mut offset = 0;
         let start_time = std::time::Instant::now();
-        // while offset < (num_samples as usize - FFT_SIZE * channels as usize) {
         while offset < sample_rate as usize * 60 {// 60 seconds of data
+            // let mut sample_buffer = [0.0; FFT_SIZE];
             for i in 0..WINDOW_SIZE {
                 // let sample_idx = i / channels as usize;
                 let sample = match channels {
@@ -119,10 +125,13 @@ impl Av {
 
                 let windowed_val = sample * (a0 - (1.0 - a0) * (2.0 * PI * i as f32 / WINDOW_SIZE as f32).cos());
                 self.fft_buffer[i] = Complex32::from(windowed_val);
+
+                // sample_buffer[i] = windowed_val;
             }
 
             for i in WINDOW_SIZE..FFT_SIZE {
                 self.fft_buffer[i] = Complex32::from(0.0);
+                // sample_buffer[i] = 0.0;
             }
 
             self.fft_handle.process_with_scratch(&mut self.fft_buffer, &mut self.fft_scratch);
@@ -155,23 +164,134 @@ impl Av {
                 instance_intensity[i] = fft_mag_db[dominant_bin_per_instance[i] as usize] / MAX_DB
             }
 
-            // processed_data.stft_output_db.push(fft_mag_db);
+            // processed_data.sample_buffers.push(sample_buffer);
+            processed_data.stft_output_db.push(fft_mag_db);
             processed_data.instance_intensity.push(instance_intensity);
         }
-        let elapsed = start_time.elapsed().as_millis();
-        let mb = std::mem::size_of::<[f32;FFT_SIZE]>() * processed_data.instance_intensity.len() / pow(2, 20);
-        println!("processing took {} ms and result takes up {} MB", elapsed, mb);
+        let out_path = std::env::current_dir().unwrap()
+            .as_path().join("res")
+            .join("sounds")
+            .join(std::path::Path::new(filename).with_extension("png"));
+
+        // pollster::block_on(processed_data.plot());
+        // let mut out_fd = std::fs::File::create(out_path).unwrap();
+        // out_fd.write(bincode::serialize(&processed_data).unwrap().as_slice());
 
         self.processed_data = processed_data;
+
+        // let mb = std::mem::size_of::<[f32;FFT_SIZE]>() * processed_data.instance_intensity.len() / pow(2, 20);
+        println!("processing took {} ms ", start_time.elapsed().as_millis());
     }
 }
 
 pub type SharedFrameIndex = Arc<Mutex<usize>>;
 
+// impl Serialize for [f32; FFT_SIZE] {
+//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+//     where
+//         S: serde::Serializer {
+//         let mut seq = serializer.serialize_seq(Some(2*FFT_SIZE + crate::NUM_INSTANCES as usize))?;
+//         for elt in self.as_slice() {
+//             seq.serialize_element(elt)?;
+//         }
+
+//         seq.end()
+//     }
+// }
+
+
+// #[derive(Serialize)]
 pub struct ProcessedData {
+    sample_rate: u32,
+    // samples: Vec<i16>,
     pub stft_output_db: Vec<[f32; FFT_SIZE]>,
     pub instance_intensity: Vec<[f32; crate::NUM_INSTANCES as usize]>,
 }
+
+impl ProcessedData {
+    fn plot(&self) {
+        let bytes = bincode::serialize(self).unwrap();
+        let client = reqwest::blocking::Client::new();
+        let response = client
+            .post("http://127.0.0.1:8080")
+            .body("hello from rust\n")
+            .send()
+            .unwrap();
+
+        // let response = reqwest::blocking::get("http://0.0.0.0:8080")
+        println!("{:?}", response);
+
+
+        // stream.read(&mut [0; 128])?;
+        // Ok(())
+
+        // let root = BitMapBackend::new(path.as_os_str(), (640, 480)).into_drawing_area();
+        // root.fill(&WHITE)?;
+        // let mut chart = ChartBuilder::on(&root)
+        //     // .caption("y=x^2", ("sans-serif", 50).into_font())
+        //     .margin(5)
+        //     .x_label_area_size(30)
+        //     .y_label_area_size(30)
+        //     .build_cartesian_2d(-1f32..1f32, -0.1f32..1f32)?;
+    
+        // chart.configure_mesh().draw()?;
+
+        // let elements = (0..FFT_SIZE).map(|i| { self.sample_rate as f32 / FFT_SIZE as f32 * i as f32 });
+    
+        // chart
+        //     // .draw_series()
+        //     .draw_series(LineSeries::new(
+        //         (-50..=50).map(|x| x as f32 / 50.0).map(|x| (x, x * x)),
+        //         &RED,
+        //     ))?;
+        //     // .label("y = x^2")
+        //     // .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RED));
+    
+        // chart
+        //     .configure_series_labels()
+        //     .background_style(&WHITE.mix(0.8))
+        //     .border_style(&BLACK)
+        //     .draw()?;
+    
+        // Ok(())
+    }
+}
+
+impl Serialize for ProcessedData {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer {
+        let mut seq = serializer.serialize_seq(Some(1 + FFT_SIZE*self.stft_output_db.len()))?;
+        seq.serialize_element(&self.sample_rate)?;
+        // for buf in self.sample_buffers.as_slice() {
+        //     for elt in buf {
+        //         seq.serialize_element(&elt)?;
+        //     }
+        // }
+        for buf in self.stft_output_db.as_slice() {
+            for elt in buf {
+                seq.serialize_element(elt)?;
+            }
+        }
+
+        // for buf in self.instance_intensity.as_slice() {
+        //     for elt in buf {
+        //         seq.serialize_element(elt)?;
+        //     }
+        // }
+        seq.end()
+    }
+}
+
+// impl Jsonable for ProcessedData {
+//     fn to_json(&self) -> json::JsonValue {
+//         json::object! {
+//             "sample_buffers": format!("{:?}", self.sample_buffers),
+//             "stft_output_db": format!("{:?}", self.stft_output_db),
+//             "instance_intensity": format!("{:?}", self.instance_intensity),
+//         }
+//     }
+// }
 
 pub struct AvSource {
     current_sample_index: usize,
