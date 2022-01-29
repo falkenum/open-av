@@ -506,7 +506,7 @@ impl Context {
 
         };
         for i in 0..self.instances.len() {
-            self.instances[i].pose[1][3] = 5.0 * self.av.processed_data.instance_intensity[frame_idx][i];
+            self.instances[i].pose[1][3] = 25.0 * self.av.processed_data.instance_intensity[frame_idx][i];
         }
         // for instance in self.instances.iter_mut() {
         //     instance.pose = anim.transforms[i].pose;

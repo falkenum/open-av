@@ -12,12 +12,12 @@ use std::sync::{Arc, Mutex};
 
 use crate::NUM_INSTANCES;
 
-const FFT_SIZE: usize = 1024;
-const WINDOW_SIZE: usize = 512;
-const HOP_SIZE: usize = 256;
+const FFT_SIZE: usize = 512;
+const WINDOW_SIZE: usize = 256;
+const HOP_SIZE: usize = 127;
 const MAX_DB: f32 = 60.0;
 const MIN_DB: f32 = 10.0;
-const MAX_FREQ: usize = 7000;
+const MAX_FREQ: usize = 3000;
 
 // trait AvProfile {
 //     fn set_led_colors(&mut self, led_colors: &mut [Color], fft_mag_db: &[f32]);
@@ -133,8 +133,8 @@ impl Av {
 
             self.fft_handle.process_with_scratch(&mut self.fft_buffer, &mut self.fft_scratch);
 
-            let mut fft_mag_db = [0.0f32; FFT_SIZE];
-            for i in 0..FFT_SIZE {
+            let mut fft_mag_db = [0.0f32; FFT_SIZE/2];
+            for i in 0..(FFT_SIZE/2) {
                 fft_mag_db[i] = 20.0 * self.fft_buffer[i].norm().log10();
                 if fft_mag_db[i] > MAX_DB {
                     fft_mag_db[i] = MAX_DB;
@@ -158,7 +158,11 @@ impl Av {
 
             let mut instance_intensity = [0.0f32; crate::NUM_INSTANCES as usize];
             for i in 0..NUM_INSTANCES as usize {
-                instance_intensity[i] = fft_mag_db[dominant_bin_per_instance[i] as usize] / MAX_DB
+                instance_intensity[i] = fft_mag_db[dominant_bin_per_instance[i] as usize] / MAX_DB;
+
+                if instance_intensity[i] < 0.0 {
+                    instance_intensity[i] = 0.0;
+                }
             }
 
             // processed_data.sample_buffers.push(sample_buffer);
@@ -170,28 +174,15 @@ impl Av {
             .join("sounds")
             .join(std::path::Path::new(filename).with_extension("pickle"));
 
-        // pollster::block_on(processed_data.plot());
         let mut out_fd = std::fs::File::create(out_path).unwrap();
         let serializable_data = processed_data.to_serializable();
-        // let bytes = bincode::DefaultOptions::new()
-        //     // .with_big_endian()
-        //     .with_native_endian()
-        //     .with_fixint_encoding()
-        //     // .allow_trailing_bytes()
-        //     .serialize(&serializable_data).unwrap();
-        // let sample_rate = &[processed_data.sample_rate];
-        // let sample_rate_bytes: &[u8] = bytemuck::cast_slice(sample_rate);
-        // let bytes: &[u8] = bytemuck::cast_slice(processed_data.stft_output_db.as_slice());
 
         let pickled_data = serde_pickle::to_vec(&serializable_data, Default::default()).unwrap();
         out_fd.write(pickled_data.as_slice()).unwrap();
         out_fd.flush().unwrap();
-        // let x: &[f32] = bytemuck::cast_slice(&bytes);
-        // let y: &[f32] = bytemuck::cast_slice(&processed_data.stft_output_db);
 
         self.processed_data = processed_data;
 
-        // let mb = std::mem::size_of::<[f32;FFT_SIZE]>() * processed_data.instance_intensity.len() / pow(2, 20);
         println!("processing took {} ms ", start_time.elapsed().as_millis());
     }
 }
@@ -200,7 +191,7 @@ pub type SharedFrameIndex = Arc<Mutex<usize>>;
 
 pub struct ProcessedData {
     sample_rate: u32,
-    pub stft_output_db: Vec<[f32; FFT_SIZE]>,
+    pub stft_output_db: Vec<[f32; FFT_SIZE / 2]>,
     pub instance_intensity: Vec<[f32; crate::NUM_INSTANCES as usize]>,
 }
 
@@ -218,19 +209,6 @@ struct SerializableData {
     sample_rate: u32,
     stft_output_db: Vec<Vec<f32>>,
 }
-
-// impl<'a> Serialize for SerializableData<'a> {
-//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-//     where
-//         S: serde::Serializer {
-//         let mut seq = serializer.serialize_seq(Some(self.stft_output_db.len()))?;
-//         for val in self.stft_output_db {
-//             seq.serialize_element(val)?;
-//         }
-
-//         seq.end()
-//     }
-// }
 
 pub struct AvSource {
     current_sample_index: usize,
@@ -260,13 +238,9 @@ impl Iterator for AvSource {
 
     fn next(&mut self) -> Option<Self::Item> {
 
-        // self.sample_queue.pop_front();
-        // self.sample_queue.push_back(sample);
         if self.current_sample_index % self.sample_idx_update_count == 0 {
             *self.shared_frame_index.lock().unwrap().deref_mut() = self.current_sample_index / self.sample_idx_update_count;
         }
-        // self.sigproc.run(self.sample_queue.iter().cloned());
-        
         self.current_sample_index += 1;
 
         let sample = match self.sample_buffer.channels() {
