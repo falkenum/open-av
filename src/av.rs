@@ -177,8 +177,13 @@ impl Av {
         // pollster::block_on(processed_data.plot());
         let mut out_fd = std::fs::File::create(out_path).unwrap();
         let bytes = bincode::DefaultOptions::new()
-            .with_big_endian().serialize(&processed_data).unwrap();
+            .with_big_endian()
+            .with_fixint_encoding()
+            .allow_trailing_bytes()
+            .serialize(&processed_data.to_serializable()).unwrap();
         out_fd.write(bytes.as_slice()).unwrap();
+        out_fd.flush().unwrap();
+        let x: &[f32] = bytemuck::cast_slice(&bytes.as_slice()[4..]);
 
         self.processed_data = processed_data;
 
@@ -189,119 +194,26 @@ impl Av {
 
 pub type SharedFrameIndex = Arc<Mutex<usize>>;
 
-// impl Serialize for [f32; FFT_SIZE] {
-//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-//     where
-//         S: serde::Serializer {
-//         let mut seq = serializer.serialize_seq(Some(2*FFT_SIZE + crate::NUM_INSTANCES as usize))?;
-//         for elt in self.as_slice() {
-//             seq.serialize_element(elt)?;
-//         }
-
-//         seq.end()
-//     }
-// }
-
-
-// #[derive(Serialize)]
 pub struct ProcessedData {
     sample_rate: u32,
-    // samples: Vec<i16>,
     pub stft_output_db: Vec<[f32; FFT_SIZE]>,
     pub instance_intensity: Vec<[f32; crate::NUM_INSTANCES as usize]>,
 }
 
 impl ProcessedData {
-    fn write_to_file(&self) {
-
-        // serialize with network byte order
-        // let bytes = bincode::DefaultOptions::new()
-        //     .with_big_endian().serialize(self).unwrap();
-        
-        
-
-        // let client = reqwest::blocking::Client::new();
-        // let response = client
-        //     .post("http://127.0.0.1:8080")
-        //     .body(bytes)
-        //     .send()
-        //     .unwrap();
-
-        // let response = reqwest::blocking::get("http://0.0.0.0:8080")
-        // println!("{:?}", response);
-
-
-        // stream.read(&mut [0; 128])?;
-        // Ok(())
-
-        // let root = BitMapBackend::new(path.as_os_str(), (640, 480)).into_drawing_area();
-        // root.fill(&WHITE)?;
-        // let mut chart = ChartBuilder::on(&root)
-        //     // .caption("y=x^2", ("sans-serif", 50).into_font())
-        //     .margin(5)
-        //     .x_label_area_size(30)
-        //     .y_label_area_size(30)
-        //     .build_cartesian_2d(-1f32..1f32, -0.1f32..1f32)?;
-    
-        // chart.configure_mesh().draw()?;
-
-        // let elements = (0..FFT_SIZE).map(|i| { self.sample_rate as f32 / FFT_SIZE as f32 * i as f32 });
-    
-        // chart
-        //     // .draw_series()
-        //     .draw_series(LineSeries::new(
-        //         (-50..=50).map(|x| x as f32 / 50.0).map(|x| (x, x * x)),
-        //         &RED,
-        //     ))?;
-        //     // .label("y = x^2")
-        //     // .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RED));
-    
-        // chart
-        //     .configure_series_labels()
-        //     .background_style(&WHITE.mix(0.8))
-        //     .border_style(&BLACK)
-        //     .draw()?;
-    
-        // Ok(())
+    fn to_serializable(&self) -> SerializableData {
+        SerializableData {
+            sample_rate: self.sample_rate,
+            stft_output_db_slices: bytemuck::cast_slice(&self.stft_output_db)
+        }
     }
 }
 
-impl Serialize for ProcessedData {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer {
-        serializer.serialize_u32(self.sample_rate)
-        // let mut seq = serializer.serialize_seq(Some(1 + FFT_SIZE*self.stft_output_db.len()))?;
-        // seq.serialize_element(&self.sample_rate)?;
-        // for buf in self.sample_buffers.as_slice() {
-        //     for elt in buf {
-        //         seq.serialize_element(&elt)?;
-        //     }
-        // }
-        // for buf in self.stft_output_db.as_slice() {
-        //     for elt in buf {
-        //         seq.serialize_element(elt)?;
-        //     }
-        // }
-
-        // for buf in self.instance_intensity.as_slice() {
-        //     for elt in buf {
-        //         seq.serialize_element(elt)?;
-        //     }
-        // }
-        // seq.end()
-    }
+#[derive(Serialize)]
+struct SerializableData<'a> {
+    sample_rate: u32,
+    stft_output_db_slices: &'a [f32],
 }
-
-// impl Jsonable for ProcessedData {
-//     fn to_json(&self) -> json::JsonValue {
-//         json::object! {
-//             "sample_buffers": format!("{:?}", self.sample_buffers),
-//             "stft_output_db": format!("{:?}", self.stft_output_db),
-//             "instance_intensity": format!("{:?}", self.instance_intensity),
-//         }
-//     }
-// }
 
 pub struct AvSource {
     current_sample_index: usize,
