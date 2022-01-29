@@ -1,15 +1,11 @@
 use rodio::OutputStreamHandle;
 use rodio::{Decoder, OutputStream, source::Source, source::Repeat};
 use rustfft::{Fft, FftDirection, num_complex::Complex32, algorithm::Radix4};
-use plotters::prelude::*;
-use serde::Serialize;
-use serde::ser::SerializeSeq;
-use bincode::Options;
+use serde::{Serialize, Serializer};
 
 use std::io::{BufReader, Write};
 use std::fs::File;
 use std::f32::consts::PI;
-use std::net::TcpStream;
 use std::ops::DerefMut;
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
@@ -172,18 +168,26 @@ impl Av {
         let out_path = std::env::current_dir().unwrap()
             .as_path().join("res")
             .join("sounds")
-            .join(std::path::Path::new(filename).with_extension("bin"));
+            .join(std::path::Path::new(filename).with_extension("pickle"));
 
         // pollster::block_on(processed_data.plot());
         let mut out_fd = std::fs::File::create(out_path).unwrap();
-        let bytes = bincode::DefaultOptions::new()
-            .with_big_endian()
-            .with_fixint_encoding()
-            .allow_trailing_bytes()
-            .serialize(&processed_data.to_serializable()).unwrap();
-        out_fd.write(bytes.as_slice()).unwrap();
+        let serializable_data = processed_data.to_serializable();
+        // let bytes = bincode::DefaultOptions::new()
+        //     // .with_big_endian()
+        //     .with_native_endian()
+        //     .with_fixint_encoding()
+        //     // .allow_trailing_bytes()
+        //     .serialize(&serializable_data).unwrap();
+        // let sample_rate = &[processed_data.sample_rate];
+        // let sample_rate_bytes: &[u8] = bytemuck::cast_slice(sample_rate);
+        // let bytes: &[u8] = bytemuck::cast_slice(processed_data.stft_output_db.as_slice());
+
+        let pickled_data = serde_pickle::to_vec(&serializable_data, Default::default()).unwrap();
+        out_fd.write(pickled_data.as_slice()).unwrap();
         out_fd.flush().unwrap();
-        let x: &[f32] = bytemuck::cast_slice(&bytes.as_slice()[4..]);
+        // let x: &[f32] = bytemuck::cast_slice(&bytes);
+        // let y: &[f32] = bytemuck::cast_slice(&processed_data.stft_output_db);
 
         self.processed_data = processed_data;
 
@@ -204,16 +208,29 @@ impl ProcessedData {
     fn to_serializable(&self) -> SerializableData {
         SerializableData {
             sample_rate: self.sample_rate,
-            stft_output_db_slices: bytemuck::cast_slice(&self.stft_output_db)
+            stft_output_db: self.stft_output_db.iter().map(|v| Vec::from(*v)).collect()
         }
     }
 }
 
 #[derive(Serialize)]
-struct SerializableData<'a> {
+struct SerializableData {
     sample_rate: u32,
-    stft_output_db_slices: &'a [f32],
+    stft_output_db: Vec<Vec<f32>>,
 }
+
+// impl<'a> Serialize for SerializableData<'a> {
+//     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+//     where
+//         S: serde::Serializer {
+//         let mut seq = serializer.serialize_seq(Some(self.stft_output_db.len()))?;
+//         for val in self.stft_output_db {
+//             seq.serialize_element(val)?;
+//         }
+
+//         seq.end()
+//     }
+// }
 
 pub struct AvSource {
     current_sample_index: usize,
