@@ -1,5 +1,7 @@
-use rodio::OutputStreamHandle;
-use rodio::{Decoder, OutputStream, source::Source, source::Repeat};
+// use rodio::OutputStreamHandle;
+// use rodio::{Decoder, OutputStream, source::Source, source::Repeat};
+use cpal::{Data, Sample, SampleFormat, traits::{StreamTrait, DeviceTrait, HostTrait}, Stream, Device, Host, SampleRate};
+use rodio::{source::Repeat, Decoder, Source};
 use rustfft::{Fft, FftDirection, num_complex::Complex32, algorithm::Radix4};
 use serde::{Serialize, Serializer};
 
@@ -60,9 +62,12 @@ const MAX_FREQ: usize = 3000;
 
 pub struct Av {
     pub frame_idx: SharedFrameIndex,
-    pub stream_handle: OutputStreamHandle,
     pub processed_data: ProcessedData,
-    _stream: OutputStream,
+    // host: Host,
+    // device: Device,
+    // stream: Option<Stream>,
+    // source_file: Option<&str>,
+    source: Option<AvSource>,
 
     fft_buffer: [Complex32; FFT_SIZE],
     fft_scratch: [Complex32; FFT_SIZE],
@@ -71,10 +76,10 @@ pub struct Av {
 
 impl Av {
     pub fn new(sample_idx: SharedFrameIndex) -> Self {
-        let (_stream, stream_handle) = OutputStream::try_default().unwrap();
+        // let (_stream, stream_handle) = OutputStream::try_default().unwrap();
+
         Self {
-            stream_handle,
-            _stream,
+            source: None,
             fft_buffer: [Complex32::from(0.0f32); FFT_SIZE],
             fft_scratch: [Complex32::from(0.0f32); FFT_SIZE],
             fft_handle: Radix4::new(FFT_SIZE, FftDirection::Forward),
@@ -185,6 +190,10 @@ impl Av {
 
         println!("processing took {} ms ", start_time.elapsed().as_millis());
     }
+
+    pub fn play(&mut self, shared_frame_index: SharedFrameIndex, source_file: &str) {
+        AvSource::new(shared_frame_index).play(source_file);
+    }
 }
 
 pub type SharedFrameIndex = Arc<Mutex<usize>>;
@@ -211,62 +220,76 @@ struct SerializableData {
 }
 
 pub struct AvSource {
-    current_sample_index: usize,
+    // current_sample_index: usize,
     sample_idx_update_count: usize,
     shared_frame_index: SharedFrameIndex,
-    sample_buffer: Repeat<Decoder<BufReader<File>>>,
+    host: Host,
+    device: Device,
+
+    // sample_buffer: Option<Repeat<Decoder<BufReader<File>>>>,
+    stream: Option<Stream>,
 }
 
 impl AvSource {
-    pub fn new(filename: &str, shared_sample_index: SharedFrameIndex) -> Self {
-        let sample_buffer = Decoder::new(
-            BufReader::new(File::open(filename).unwrap())
-        ).unwrap().repeat_infinite();
+    pub fn new(shared_frame_index: SharedFrameIndex) -> Self {
+        
+        let host = cpal::default_host();
+        let device = host.default_output_device().expect("no output device available");
 
         Self {
-            shared_frame_index: shared_sample_index,
+            host,
+            device,
+            stream: None,
+            shared_frame_index,
             sample_idx_update_count: HOP_SIZE,
-            current_sample_index: 0,
-            sample_buffer,
+            // sample_buffer: None,
         }
     }
-}
 
+    pub fn play(&mut self, source_file: &str) {
+        let mut sample_buffer = Decoder::new(
+            BufReader::new(File::open(source_file).unwrap())
+        ).unwrap().repeat_infinite();
+        let sample_idx_update_count = self.sample_idx_update_count;
+        let shared_frame_index = Arc::clone(&self.shared_frame_index);
+        let mut current_sample_index = 0;
 
-impl Iterator for AvSource {
-    type Item = f32;
+        let mut supported_configs_range = self.device.supported_output_configs()
+            .expect("error while querying configs");
 
-    fn next(&mut self) -> Option<Self::Item> {
+        let config = supported_configs_range.next()
+            .expect("no supported config?!")
+            .with_max_sample_rate()
+            .config();
+        // SampleRate(sample_buffer.sample_rate())
+        let data_callback = move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+            for i in 0..data.len() {
+                if current_sample_index % sample_idx_update_count == 0 {
+                    *shared_frame_index.lock().unwrap().deref_mut() = current_sample_index / sample_idx_update_count;
+                }
+                current_sample_index += 1;
 
-        if self.current_sample_index % self.sample_idx_update_count == 0 {
-            *self.shared_frame_index.lock().unwrap().deref_mut() = self.current_sample_index / self.sample_idx_update_count;
-        }
-        self.current_sample_index += 1;
+                let sample = match config.channels {
+                    1 => sample_buffer.next().unwrap() as f32,
+                    2 => (sample_buffer.next().unwrap() as f32 + sample_buffer.next().unwrap() as f32) / 2.0,
+                    _ => panic!(),
+                } / i16::MAX as f32;
 
-        let sample = match self.sample_buffer.channels() {
-            1 => self.sample_buffer.next().unwrap() as f32,
-            2 => (self.sample_buffer.next().unwrap() as f32 + self.sample_buffer.next().unwrap() as f32) / 2.0,
-            _ => panic!(),
-        } / i16::MAX as f32;
+                data[i] = sample;
+            }
+        };
+        let error_callback = |err| {
+            panic!("{:?}", err);
+        };
+        let stream = self.device.build_output_stream(
+            &config,
+            data_callback,
+            error_callback,
+        ).unwrap();
 
-        Some(sample)
-    }
-}
+        stream.play().unwrap();
 
-impl Source for AvSource {
-    fn current_frame_len(&self) -> Option<usize> {
-        None
-    }
-
-    fn channels(&self) -> u16 {
-        1
-    }
-
-    fn sample_rate(&self) -> u32 {
-        self.sample_buffer.sample_rate()
-    }
-
-    fn total_duration(&self) -> Option<Duration> {
-        None
+        self.stream = Some(stream);
+        // self.sample_buffer = Some(sample_buffer);
     }
 }

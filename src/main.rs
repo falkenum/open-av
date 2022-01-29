@@ -422,11 +422,10 @@ impl Context {
             .unwrap().as_path().join("res").join("sounds").join("enter-sandman.wav");
         let source_file = source_path.to_str().unwrap();
         let frame_idx = Arc::from(Mutex::from(0usize));
-        let source =  AvSource::new(source_file, Arc::clone(&frame_idx));
+        // let source =  AvSource::new(source_file, Arc::clone(&frame_idx));
         let mut av = Av::new(Arc::clone(&frame_idx));
         av.process(source_file);
-
-        av.stream_handle.play_raw(source).unwrap();
+        av.play(frame_idx, source_file);
 
         Self {
             surface,
