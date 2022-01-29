@@ -1,5 +1,6 @@
 // use rodio::OutputStreamHandle;
 // use rodio::{Decoder, OutputStream, source::Source, source::Repeat};
+use babycat::resample::babycat_lanczos::resample;
 use cpal::{Data, Sample, SampleFormat, traits::{StreamTrait, DeviceTrait, HostTrait}, Stream, Device, Host, SampleRate};
 use rodio::{source::Repeat, Decoder, Source};
 use rustfft::{Fft, FftDirection, num_complex::Complex32, algorithm::Radix4};
@@ -192,7 +193,9 @@ impl Av {
     }
 
     pub fn play(&mut self, shared_frame_index: SharedFrameIndex, source_file: &str) {
-        AvSource::new(shared_frame_index).play(source_file);
+        let mut source = AvSource::new(shared_frame_index);
+        source.play(source_file);
+        self.source = Some(source);
     }
 }
 
@@ -222,6 +225,7 @@ struct SerializableData {
 pub struct AvSource {
     // current_sample_index: usize,
     sample_idx_update_count: usize,
+    resample_count: usize,
     shared_frame_index: SharedFrameIndex,
     host: Host,
     device: Device,
@@ -242,18 +246,12 @@ impl AvSource {
             stream: None,
             shared_frame_index,
             sample_idx_update_count: HOP_SIZE,
+            resample_count: 1024,
             // sample_buffer: None,
         }
     }
 
     pub fn play(&mut self, source_file: &str) {
-        let mut sample_buffer = Decoder::new(
-            BufReader::new(File::open(source_file).unwrap())
-        ).unwrap().repeat_infinite();
-        let sample_idx_update_count = self.sample_idx_update_count;
-        let shared_frame_index = Arc::clone(&self.shared_frame_index);
-        let mut current_sample_index = 0;
-
         let mut supported_configs_range = self.device.supported_output_configs()
             .expect("error while querying configs");
 
@@ -261,21 +259,40 @@ impl AvSource {
             .expect("no supported config?!")
             .with_max_sample_rate()
             .config();
-        // SampleRate(sample_buffer.sample_rate())
+
+        let pre_conversion_sample_buffer = Decoder::new(
+            BufReader::new(File::open(source_file).unwrap())
+        ).unwrap();
+        let sample_rate = pre_conversion_sample_buffer.sample_rate();
+        let channels = pre_conversion_sample_buffer.channels();
+
+        // TODO don't load this all at once
+        let pre_conversion_sample_buffer: Vec<_> = pre_conversion_sample_buffer.map(|val| val as f32 / i16::MAX as f32).collect();
+
+        let sample_idx_update_count = self.sample_idx_update_count;
+        let resample_count = self.resample_count;
+        let shared_frame_index = Arc::clone(&self.shared_frame_index);
+        let mut current_sample_index = 0;
+
+        let sample_buffer = resample(
+            sample_rate, 
+            config.sample_rate.0, 
+            channels.into(), 
+            &pre_conversion_sample_buffer.as_slice(),
+// [current_sample_index..(current_sample_index+data.len())]
+        ).unwrap();
+
         let data_callback = move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
             for i in 0..data.len() {
                 if current_sample_index % sample_idx_update_count == 0 {
                     *shared_frame_index.lock().unwrap().deref_mut() = current_sample_index / sample_idx_update_count;
+
                 }
+
+                // TODO support when file is mono but device is stereo
+                data[i] = sample_buffer[current_sample_index];
+
                 current_sample_index += 1;
-
-                let sample = match config.channels {
-                    1 => sample_buffer.next().unwrap() as f32,
-                    2 => (sample_buffer.next().unwrap() as f32 + sample_buffer.next().unwrap() as f32) / 2.0,
-                    _ => panic!(),
-                } / i16::MAX as f32;
-
-                data[i] = sample;
             }
         };
         let error_callback = |err| {
