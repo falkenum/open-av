@@ -78,6 +78,7 @@ fn create_render_pipeline(
 
 // const NUM_INSTANCES_PER_ROW: u32 = 4;
 const NUM_INSTANCES: u32 = 32;
+const FPS: u32 = 60;
 
 // main.rs
 #[repr(C)]
@@ -204,7 +205,7 @@ struct Context {
     light_bind_group: wgpu::BindGroup,
     last_frame_update: std::time::Instant,
     animation_start: std::time::Instant,
-    av: Av
+    av: Av<'static>
 }
 
 trait VisualElement {
@@ -596,7 +597,7 @@ fn main() {
 
     // let mut last_model_update = std::time::Instant::now();
     event_loop.run(move |event, _, control_flow| {
-        if state.last_frame_update.elapsed() > std::time::Duration::from_millis(1000) / 60 {
+        if state.last_frame_update.elapsed() > std::time::Duration::from_millis(1000) / FPS {
             state.last_frame_update = std::time::Instant::now();
 
             state.update();
