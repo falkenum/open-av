@@ -10,7 +10,6 @@ use std::{io::{BufReader, Write}, collections::VecDeque};
 use std::fs::File;
 use std::f32::consts::PI;
 use std::ops::DerefMut;
-use std::time::Duration;
 use std::sync::{Arc, Mutex};
 
 use crate::NUM_INSTANCES;
@@ -61,18 +60,20 @@ const MAX_FREQ: usize = 3000;
 //     }
 // }
 
-pub struct Av<'a> {
+pub struct Av {
     // pub frame_idx: SharedFrameIndex,
     pub processed_data: ProcessedData,
-    pub av_data_queue: Arc<Mutex<VecDeque<AvData<'a>>>>,
-    source: Option<AvSource<'a>>,
+    pub av_data_queue: SharedAvData,
+    // pub last_visual_update: Option<StreamInstant>,
+    pub next_av_data: Option<AvData>,
+    source: Option<AvSource>,
 
     fft_buffer: [Complex32; FFT_SIZE],
     fft_scratch: [Complex32; FFT_SIZE],
     fft_handle: Radix4<f32>,
 }
 
-impl<'a> Av<'a> {
+impl Av {
     pub fn new() -> Self {
         // let (_stream, stream_handle) = OutputStream::try_default().unwrap();
 
@@ -87,7 +88,7 @@ impl<'a> Av<'a> {
                 instance_intensity: Vec::new(),
             },
             av_data_queue: Arc::new(Mutex::new(VecDeque::new())),
-
+            next_av_data: None
         }
     }
 
@@ -180,27 +181,29 @@ impl<'a> Av<'a> {
     }
 
     pub fn play(&mut self, source_file: &str) {
-        let mut source = AvSource::new(Arc::clone(&self.av_data_queue));
-        source.play(source_file);
+        let mut source = AvSource::new();
+        source.play(source_file, Arc::clone(&self.av_data_queue));
         self.source = Some(source);
     }
 }
 
-pub type SharedAvQueue<'a> = Arc<Mutex<VecDeque<AvData<'a>>>>;
+pub type SharedAvData = Arc<Mutex<VecDeque<AvData>>>;
 
-pub struct AvData<'a> {
-    pub instance_intensity: &'a [f32; crate::NUM_INSTANCES as usize],
-    pub timestamp: StreamInstant
+#[derive(Clone)]
+pub struct AvData {
+    pub frame_index: usize,
+    pub callback_time: std::time::Instant,
+    pub playback_delay: std::time::Duration,
 }
 
 #[derive(Serialize)]
-struct ProcessedData {
+pub struct ProcessedData {
     sample_rate: u32,
     stft_output_db: Vec<Vec<f32>>,
-    instance_intensity: Vec<[f32; crate::NUM_INSTANCES as usize]>,
+    pub instance_intensity: Vec<[f32; crate::NUM_INSTANCES as usize]>,
 }
 
-pub struct AvSource<'a> {
+pub struct AvSource {
     sample_idx_update_count: usize,
     // resample_count: usize,
     // shared_: SharedFrameIndex,
@@ -208,11 +211,12 @@ pub struct AvSource<'a> {
     device: Device,
     config: StreamConfig, 
     stream: Option<Stream>,
-    av_data_queue: SharedAvQueue<'a>,
+    // processed_data: &'a ProcessedData
+    // av_data_queue: SharedAvQueue<'a>,
 }
 
-impl<'a> AvSource<'a> {
-    pub fn new(av_data_queue: SharedAvQueue<'a>) -> Self {
+impl AvSource {
+    pub fn new() -> Self {
         
         let host = cpal::default_host();
         let device = host.default_output_device().expect("no output device available");
@@ -228,15 +232,16 @@ impl<'a> AvSource<'a> {
         Self {
             host,
             device,
+            sample_idx_update_count: (config.sample_rate.0 / (crate::MAX_INSTANCE_UPDATE_RATE_HZ)) as usize,
             config,
             stream: None,
-            sample_idx_update_count: (config.sample_rate.0 / (crate::FPS * 2)) as usize,
+            // processed_data,
             // resample_count: 1024,
-            av_data_queue,
+            // av_data_queue,
         }
     }
 
-    pub fn play(&mut self, source_file: &str) {
+    pub fn play(&mut self, source_file: &str, av_data_queue: SharedAvData) {
         let pre_conversion_sample_buffer = Decoder::new(
             BufReader::new(File::open(source_file).unwrap())
         ).unwrap();
@@ -245,24 +250,32 @@ impl<'a> AvSource<'a> {
 
         // TODO don't load this all at once
         let pre_conversion_sample_buffer: Vec<_> = pre_conversion_sample_buffer.map(|val| val as f32 / i16::MAX as f32).collect();
+        println!("loaded raw sample buffer");
 
         let sample_idx_update_count = self.sample_idx_update_count;
-        // let resample_count = self.resample_count;
-        let av_data_queue = Arc::clone(&self.av_data_queue);
+        // let processed_data: &'a ProcessedData = self.processed_data;
 
         let mut current_sample_index = 0;
 
+        // TODO don't load this all at once
         let sample_buffer = resample(
             sample_rate, 
             self.config.sample_rate.0, 
             channels.into(), 
             &pre_conversion_sample_buffer.as_slice(),
         ).unwrap();
+        println!("resampled the buffer");
 
         let data_callback = move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+            let callback_time = std::time::Instant::now();
             for i in 0..data.len() {
                 if current_sample_index % sample_idx_update_count == 0 {
                     // *shared_frame_index.lock().unwrap().deref_mut() = current_sample_index / sample_idx_update_count;
+                    av_data_queue.lock().unwrap().deref_mut().push_back(AvData {
+                        callback_time,
+                        playback_delay: info.timestamp().playback.duration_since(&info.timestamp().callback).unwrap(),
+                        frame_index: current_sample_index / HOP_SIZE,
+                    });
                 }
 
                 // TODO support when file is mono but device is stereo

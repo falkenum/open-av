@@ -1,5 +1,6 @@
-use std::{iter, time::Duration, sync::{Arc, Mutex}, ops::DerefMut};
+use std::{iter, time::Duration, sync::{Arc, Mutex}, ops::{DerefMut, Deref}};
 use cgmath::{InnerSpace, Rotation3, Zero};
+use cpal::StreamInstant;
 use rodio::Source;
 use wgpu::{util::DeviceExt, include_wgsl};
 use winit::{
@@ -78,7 +79,9 @@ fn create_render_pipeline(
 
 // const NUM_INSTANCES_PER_ROW: u32 = 4;
 const NUM_INSTANCES: u32 = 32;
-const FPS: u32 = 60;
+const FPS: u32 = 120;
+const MAX_INSTANCE_UPDATE_RATE_HZ: u32 = FPS*2;
+const MAX_AUDIO_DRIFT_MS: u32 = 15;
 
 // main.rs
 #[repr(C)]
@@ -204,8 +207,7 @@ struct Context {
     light_buffer: wgpu::Buffer,
     light_bind_group: wgpu::BindGroup,
     last_frame_update: std::time::Instant,
-    animation_start: std::time::Instant,
-    av: Av<'static>
+    av: Av
 }
 
 trait VisualElement {
@@ -422,11 +424,11 @@ impl Context {
         let source_path = std::env::current_dir()
             .unwrap().as_path().join("res").join("sounds").join("enter-sandman.wav");
         let source_file = source_path.to_str().unwrap();
-        let frame_idx = Arc::from(Mutex::from(0usize));
+        // let frame_idx = Arc::from(Mutex::from(0usize));
         // let source =  AvSource::new(source_file, Arc::clone(&frame_idx));
-        let mut av = Av::new(Arc::clone(&frame_idx));
+        let mut av = Av::new();
         av.process(source_file);
-        av.play(frame_idx, source_file);
+        av.play(source_file);
 
         Self {
             surface,
@@ -445,7 +447,7 @@ impl Context {
             light_buffer,
             light_bind_group,
             last_frame_update: std::time::Instant::now(),
-            animation_start: std::time::Instant::now(),
+            // animation_start: sd::time::Instant::now(),
             av,
         }
     }
@@ -466,7 +468,7 @@ impl Context {
         self.camera_context.on_input(event)
     }
 
-    fn update(&mut self) {
+    fn update(&mut self) -> Result<(), ()>{
         self.camera_context.update();
 
         // Update the light
@@ -500,13 +502,39 @@ impl Context {
         //     }
         // }
 
-        let frame_idx = {
-            let mut lock = self.av.frame_idx.lock().unwrap();
-            lock.deref_mut().clone()
+        let epsilon = Duration::from_millis(MAX_AUDIO_DRIFT_MS as u64);
+        let av_data = {
+            let mut lock = self.av.av_data_queue.lock().unwrap();
+            let queue = lock.deref_mut();
+            // let mut next_av_data = None;
+            
+            match self.av.next_av_data {
+                // if there's nothing in the queue, we can't do anything
+                None => {
+                    self.av.next_av_data = queue.pop_front();
+                    return Err(());
+                },
+                Some(ref data) => {
+                    if data.playback_delay > data.callback_time.elapsed() + epsilon {
+                        // if we're greater than epsilon before the time that the front sample is going to play, then we can't do anything
+                        return Err(());
+                    } else if data.playback_delay + epsilon < data.callback_time.elapsed() {
+                        // if we're greater than epsilon after the time that the front sample should play, then move on to the next one
+                        self.av.next_av_data = queue.pop_front();
+                        return Err(());
+                    } else {
+                        let result = data.clone();
+                        self.av.next_av_data = queue.pop_front();
+                        result
 
+                    }
+                }
+            }
         };
+
+
         for i in 0..self.instances.len() {
-            self.instances[i].pose[1][3] = 25.0 * self.av.processed_data.instance_intensity[frame_idx][i];
+            self.instances[i].pose[1][3] = 25.0 * self.av.processed_data.instance_intensity[av_data.frame_index][i];
         }
         // for instance in self.instances.iter_mut() {
         //     instance.pose = anim.transforms[i].pose;
@@ -515,6 +543,8 @@ impl Context {
         self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
         self.queue.write_buffer(&self.camera_context.buffer, 0, bytemuck::cast_slice(&[self.camera_context.uniform]));
         self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
+
+        return Ok(());
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -597,11 +627,18 @@ fn main() {
 
     // let mut last_model_update = std::time::Instant::now();
     event_loop.run(move |event, _, control_flow| {
-        if state.last_frame_update.elapsed() > std::time::Duration::from_millis(1000) / FPS {
-            state.last_frame_update = std::time::Instant::now();
+        // try to update at a rate of at most 200 Hz
+        // while state.last_frame_update.elapsed() < std::time::Duration::from_millis(1) {}
+        // state.last_frame_update = std::time::Instant::now();
 
-            state.update();
-            match state.render() {
+        *control_flow = ControlFlow::Poll;
+
+        // let's not get crazy fast here
+        while state.last_frame_update.elapsed() < std::time::Duration::from_millis(1) {}
+
+        match state.update() {
+            // if updated successfully, then render
+            Ok(_) => match state.render() {
                 Ok(_) => {}
                 // Reconfigure the surface if lost
                 Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
@@ -609,10 +646,10 @@ fn main() {
                 Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
                 // All other errors (Outdated, Timeout) should be resolved by the next frame
                 Err(e) => eprintln!("{:?}", e),
-            }
+            },
+            Err(_) => ()
         }
 
-        *control_flow = ControlFlow::Poll;
         match event {
             Event::MainEventsCleared => window.request_redraw(),
             Event::WindowEvent {
