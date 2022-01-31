@@ -3,14 +3,14 @@ use cpal::{Data, Sample, SampleFormat, traits::{StreamTrait, DeviceTrait, HostTr
 use rodio::{source::Repeat, Decoder, Source};
 use rustfft::{Fft, FftDirection, num_complex::Complex32, algorithm::Radix4};
 use serde::{Serialize, Serializer};
-use futures::{stream::{Stream, StreamExt, Buffered, Map, ReadyChunks}, Future, FutureExt, future};
-use tokio::{io::{BufReader}};
+use futures::{stream::{Stream, StreamExt, Buffered, Map, ReadyChunks}, Future, FutureExt, future::{self, Ready}, TryFutureExt};
+use tokio::{io::{BufReader}, sync::oneshot::{Receiver, self, Sender}};
 
-use std::{io::{Write}, fs::File, collections::VecDeque, sync::MutexGuard, ops::Deref};
+use async_std::{io::{Write}, fs::File, task::Poll};
 // use std::fs::File;
-use std::f32::consts::PI;
-use std::ops::DerefMut;
-use std::sync::{Arc, Mutex};
+// use std::f32::consts::PI;
+// use std::ops::DerefMut;
+use async_std::sync::{Arc, Mutex};
 
 use crate::NUM_INSTANCES;
 
@@ -225,68 +225,57 @@ pub struct ProcessedData {
     stft_output_db: Vec<Vec<f32>>,
     pub instance_intensity: Vec<[f32; crate::NUM_INSTANCES as usize]>,
 }
-struct Resampler<T: Stream<Item = f32>> {
-    from_rate: u32,
-    to_rate: u32,
-    channels: u32,
-    buffer: VecDeque<f32>,
-    source: ReadyChunks<T>,
+
+fn start_resample_loop(to_output: Sender<f32>, from_decoder: Receiver<Vec<f32>>, from_rate: u32, to_rate: u32, channels: u32) {
+
+    tokio::spawn( async move {
+        loop {
+            match from_decoder.await {
+                Ok(data) => {
+                    let result = resample(
+                        from_rate, 
+                        to_rate, 
+                        channels, 
+                        data.as_slice(),
+                    ).expect("could not resample");
+
+                    for elt in result.iter() {
+                        to_output.send(*elt).expect("couldn't send");
+                    }
+                },
+                Err(_) => panic!(),
+            }
+        }
+    });
 }
 
-impl<T: Stream<Item = f32> + Unpin> Resampler<T> {
-    fn new(input_stream: T, sample_count: usize, from_rate: u32, to_rate: u32, channels: u32) -> Self {
-        Self {
-            buffer: VecDeque::new(),
-            source: input_stream.ready_chunks(sample_count),
-            from_rate,
-            to_rate,
-            channels,
+fn start_decode_loop(to_resampler: Sender<Vec<f32>>, buffer_capacity: usize, decoder: Decoder<std::fs::File>) {
+    tokio::spawn(async move {
+        let decoder = AsyncDecoder { inner: decoder }.ready_chunks(buffer_capacity);
+        loop {
+            match decoder.next().await {
+                Some(data) => 
+                    to_resampler.send(data).expect("couldn't send"),
+                None => (),
+            }
         }
-    }
-}
-
-impl<T: Stream<Item = f32>> Stream for Resampler<T> where T::Item: future::Future {
-    type Item = T::Item;
-
-    fn poll_next(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
-        if self.buffer.len() == 0 {
-            tokio::spawn(async move {
-                if let Some(buffer) = self.source.next().await {
-                    self.buffer = VecDeque::from(resample(
-                        self.from_rate, 
-                        self.to_rate, 
-                        self.channels, 
-                        buffer.as_slice(),
-                    ).expect("could not resample"));
-                }
-            });
-        }
-
-    }
+    });
 }
 
 struct AsyncDecoder {
-    inner: Decoder<File>,
+    inner: Decoder<std::fs::File>,
 }
 
 impl futures::stream::Stream for AsyncDecoder {
-    type Item = future::Ready<f32>;
+    type Item = f32;
 
     fn poll_next(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
         std::task::Poll::Ready( 
             match self.inner.next() {
-                Some(val) => Some(future::ready(val as f32 / i16::MAX as f32)),
+                Some(val) => Some(val as f32 / i16::MAX as f32),
                 None => None,
             }
         )
-    }
-}
-
-impl AsyncDecoder {
-    fn new(source_file: &str) -> Self {
-        AsyncDecoder {
-            inner: Decoder::new(File::open(source_file).unwrap()).unwrap(),
-        }
     }
 }
 
@@ -330,20 +319,24 @@ impl AvSource {
         }
     }
 
-    pub fn play(&mut self, source_file: &str) {
-        let decoder = AsyncDecoder::new(source_file);
-        let source_sample_rate = decoder.inner.sample_rate();
-        let source_channels = decoder.inner.channels();
+    pub async fn play(&mut self, source_file: &str) {
+        let decoder = Decoder::new(std::fs::File::open(source_file).unwrap()).unwrap();
 
-        let target_sample_rate = self.config.sample_rate.0;
+        let source_sample_rate = decoder.sample_rate();
+        let source_channels = decoder.channels() as u32;
+        let target_sample_rate = self.config.sample_rate.0 as u32;
 
-        // buffer is 1 second of samples
-        let raw_samples = decoder.buffered(target_sample_rate);
+        let (to_output, from_resampler) =  oneshot::channel();
+        let (to_resampler, from_decoder) =  oneshot::channel();
+        start_decode_loop(to_resampler, target_sample_rate as usize, decoder);
+        start_resample_loop(to_output, from_decoder, source_sample_rate, target_sample_rate, source_channels);
 
-        let output_samples = Resampler::new(raw_samples, target_sample_rate);
+        // let raw_samples = decoder.ready_chunks(target_sample_rate);
+        // let output_samples = resample_loop(rx, source_sample_rate, target_sample_rate, source_channels);
 
         let sample_idx_update_count =(self.config.sample_rate.0 / (crate::MAX_INSTANCE_UPDATE_RATE_HZ)) as usize;
         let mut current_sample_index = 0;
+
 
         let data_callback = move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
             let callback_time = std::time::Instant::now();
