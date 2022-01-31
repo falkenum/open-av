@@ -15,7 +15,7 @@ mod texture;
 mod camera;
 mod av;
 
-use av::{Av, AvSource};
+use av::{Av};
 use model::{DrawModel, Vertex};
 use camera::CameraContext;
 
@@ -427,9 +427,7 @@ impl Context {
         let source_file = source_path.to_str().unwrap();
         // let frame_idx = Arc::from(Mutex::from(0usize));
         // let source =  AvSource::new(source_file, Arc::clone(&frame_idx));
-        let mut av = Av::new();
-        av.process(source_file);
-        av.play(source_file);
+        let av = Av::play(source_file);
 
         Self {
             surface,
@@ -503,38 +501,41 @@ impl Context {
         //     }
         // }
 
-        let epsilon = Duration::from_millis(MAX_AUDIO_DRIFT_MS as u64);
-        let av_data = {
-            let mut queue = self.av.av_data_queue.lock();
-            // let mut next_av_data = None;
+        // let epsilon = Duration::from_millis(MAX_AUDIO_DRIFT_MS as u64);
+        // let av_data = {
+        //     // let mut queue = self.av.av_data_queue.lock();
+        //     // let mut next_av_data = None;
             
-            match self.av.next_av_data {
-                // if there's nothing in the queue, we can't do anything
-                None => {
-                    self.av.next_av_data = queue.pop();
-                    return Err(());
-                },
-                Some(ref data) => {
-                    if data.playback_delay > data.callback_time.elapsed() + epsilon {
-                        // if we're greater than epsilon before the time that the front sample is going to play, then we can't do anything
-                        return Err(());
-                    } else if data.playback_delay + epsilon < data.callback_time.elapsed() {
-                        // if we're greater than epsilon after the time that the front sample should play, then move on to the next one
-                        self.av.next_av_data = queue.pop();
-                        return Err(());
-                    } else {
-                        let result = data.clone();
-                        self.av.next_av_data = queue.pop();
-                        result
+        //     match self.av.next_av_data {
+        //         // if there's nothing in the queue, we can't do anything
+        //         None => {
+        //             self.av.next_av_data = queue.pop();
+        //             return Err(());
+        //         },
+        //         Some(ref data) => {
+        //             if data.playback_delay > data.callback_time.elapsed() + epsilon {
+        //                 // if we're greater than epsilon before the time that the front sample is going to play, then we can't do anything
+        //                 return Err(());
+        //             } else if data.playback_delay + epsilon < data.callback_time.elapsed() {
+        //                 // if we're greater than epsilon after the time that the front sample should play, then move on to the next one
+        //                 self.av.next_av_data = queue.pop();
+        //                 return Err(());
+        //             } else {
+        //                 let result = data.clone();
+        //                 self.av.next_av_data = queue.pop();
+        //                 result
 
-                    }
-                }
-            }
-        };
+        //             }
+        //         }
+        //     }
+        // };
 
+        pollster::block_on(async {
+            self.av.av_data_receiver.changed().await.expect("error awaiting");
+        });
 
         for i in 0..self.instances.len() {
-            self.instances[i].pose[1][3] = 25.0 * self.av.processed_data.instance_intensity[av_data.frame_index][i];
+            self.instances[i].pose[1][3] = 25.0 * self.av.av_data_receiver.borrow().instance_intensity[i];
         }
         // for instance in self.instances.iter_mut() {
         //     instance.pose = anim.transforms[i].pose;
