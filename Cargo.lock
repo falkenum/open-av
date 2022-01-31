@@ -1803,6 +1803,7 @@ dependencies = [
  "futures",
  "glob",
  "image",
+ "log",
  "pollster",
  "regex",
  "rodio",

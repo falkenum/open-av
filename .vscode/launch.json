@@ -19,7 +19,7 @@
                 "args": [
                     "build",
                     "--bin=open-av",
-                    "--package=open-av"
+                    "--package=open-av",
                 ],
                 "filter": {
                     "name": "open-av",

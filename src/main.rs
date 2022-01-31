@@ -623,6 +623,8 @@ impl Context {
 
 #[tokio::main]
 async fn main() {
+    env_logger::init();
+
     let event_loop = EventLoop::new();
     let title = env!("CARGO_PKG_NAME");
     let window = winit::window::WindowBuilder::new()
@@ -637,6 +639,7 @@ async fn main() {
     event_loop.run(move |event, _, control_flow| {
         pollster::block_on( async {
             state.update().await;
+            while state.last_frame_update.elapsed() < tokio::time::Duration::from_secs(1) / FPS {}
         });
         // try to update at a rate of at most 200 Hz
         // while state.last_frame_update.elapsed() < std::time::Duration::from_millis(1) {}
@@ -652,10 +655,6 @@ async fn main() {
         };
 
         *control_flow = ControlFlow::Poll;
-
-
-        // let's not get crazy fast here
-        while state.last_frame_update.elapsed() < std::time::Duration::from_millis(10) {}
 
 
         match event {
