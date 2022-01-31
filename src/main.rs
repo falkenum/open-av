@@ -1,4 +1,6 @@
-use std::{iter, time::Duration, sync::{Arc, Mutex}, ops::{DerefMut, Deref}};
+use std::{ops::{DerefMut, Deref}, iter};
+
+use async_std::{sync::{Arc, Mutex}, channel::Send};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use cgmath::{InnerSpace, Rotation3, Zero};
 use cpal::StreamInstant;
@@ -201,14 +203,13 @@ struct Context {
     // light_render_pipeline: wgpu::RenderPipeline,
     obj_model: model::Model,
     camera_context: camera::CameraContext,
-    instances: Vec<Instance>,
+    instances: Arc<Mutex<Vec<Instance>>>,
     instance_buffer: wgpu::Buffer,
     depth_texture: texture::Texture,
     light_uniform: LightUniform,
     light_buffer: wgpu::Buffer,
     light_bind_group: wgpu::BindGroup,
     last_frame_update: std::time::Instant,
-    av: Av
 }
 
 trait VisualElement {
@@ -424,10 +425,25 @@ impl Context {
         // let source_file = "C:\\Users\\sjfal\\repos\\open-av\\res\\";
         let source_path = std::env::current_dir()
             .unwrap().as_path().join("res").join("sounds").join("enter-sandman.wav");
-        let source_file = source_path.to_str().unwrap();
         // let frame_idx = Arc::from(Mutex::from(0usize));
         // let source =  AvSource::new(source_file, Arc::clone(&frame_idx));
-        let av = Av::play(source_file);
+        let instances = Arc::new(Mutex::new(instances));
+        let instances_clone = Arc::clone(&instances);
+
+
+        tokio::spawn(async move {
+            let source_file = source_path.to_str().unwrap();
+            let mut av_data_receiver = Av::play(String::from(source_file));
+
+            loop {
+                av_data_receiver.changed().await.expect("error awaiting");
+                let mut lock = instances_clone.lock().await;
+                let instances = lock.deref_mut();
+                for i in 0..instances.len() {
+                    instances[i].pose[1][3] = 25.0 * av_data_receiver.borrow().instance_intensity[i];
+                }
+            }
+        });
 
         Self {
             surface,
@@ -447,7 +463,6 @@ impl Context {
             light_bind_group,
             last_frame_update: std::time::Instant::now(),
             // animation_start: sd::time::Instant::now(),
-            av,
         }
     }
 
@@ -467,7 +482,7 @@ impl Context {
         self.camera_context.on_input(event)
     }
 
-    fn update(&mut self) -> Result<(), ()>{
+    async fn update(&mut self) {
         self.camera_context.update();
 
         // Update the light
@@ -530,22 +545,14 @@ impl Context {
         //     }
         // };
 
-        pollster::block_on(async {
-            self.av.av_data_receiver.changed().await.expect("error awaiting");
-        });
 
-        for i in 0..self.instances.len() {
-            self.instances[i].pose[1][3] = 25.0 * self.av.av_data_receiver.borrow().instance_intensity[i];
-        }
+        self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.instances.lock().await.deref()));
+        self.queue.write_buffer(&self.camera_context.buffer, 0, bytemuck::cast_slice(&[self.camera_context.uniform]));
+        self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
         // for instance in self.instances.iter_mut() {
         //     instance.pose = anim.transforms[i].pose;
         //     instance.normal = anim.transforms[i].normal;
         // }
-        self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.instances));
-        self.queue.write_buffer(&self.camera_context.buffer, 0, bytemuck::cast_slice(&[self.camera_context.uniform]));
-        self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
-
-        return Ok(());
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -590,7 +597,7 @@ impl Context {
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.draw_model_instanced(
                 &self.obj_model,
-                0..self.instances.len() as u32,
+                0..NUM_INSTANCES as u32,
                 &self.camera_context.bind_group,
                 &self.light_bind_group,
             );
@@ -625,30 +632,31 @@ async fn main() {
 
     let mut state = Context::new(&window).await;
 
+
     // let mut last_model_update = std::time::Instant::now();
     event_loop.run(move |event, _, control_flow| {
+        pollster::block_on( async {
+            state.update().await;
+        });
         // try to update at a rate of at most 200 Hz
         // while state.last_frame_update.elapsed() < std::time::Duration::from_millis(1) {}
         // state.last_frame_update = std::time::Instant::now();
+        match state.render() {
+            Ok(_) => {}
+            // Reconfigure the surface if lost
+            Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
+            // The system is out of memory, we should probably quit
+            Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
+            // All other errors (Outdated, Timeout) should be resolved by the next frame
+            Err(e) => eprintln!("{:?}", e),
+        };
 
         *control_flow = ControlFlow::Poll;
 
-        // let's not get crazy fast here
-        // while state.last_frame_update.elapsed() < std::time::Duration::from_millis(1) {
 
-        match state.update() {
-            // if updated successfully, then render
-            Ok(_) => match state.render() {
-                Ok(_) => {}
-                // Reconfigure the surface if lost
-                Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
-                // The system is out of memory, we should probably quit
-                Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
-                // All other errors (Outdated, Timeout) should be resolved by the next frame
-                Err(e) => eprintln!("{:?}", e),
-            },
-            Err(_) => ()
-        }
+        // let's not get crazy fast here
+        while state.last_frame_update.elapsed() < std::time::Duration::from_millis(10) {}
+
 
         match event {
             Event::MainEventsCleared => window.request_redraw(),
