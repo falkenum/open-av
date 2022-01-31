@@ -1,13 +1,13 @@
-// use rodio::OutputStreamHandle;
-// use rodio::{Decoder, OutputStream, source::Source, source::Repeat};
 use babycat::resample::babycat_lanczos::resample;
-use cpal::{Data, Sample, SampleFormat, traits::{StreamTrait, DeviceTrait, HostTrait}, Stream, Device, Host, SampleRate, StreamInstant, StreamConfig};
+use cpal::{Data, Sample, SampleFormat, traits::{StreamTrait, DeviceTrait, HostTrait}, Device, Host, SampleRate, StreamInstant, StreamConfig};
 use rodio::{source::Repeat, Decoder, Source};
 use rustfft::{Fft, FftDirection, num_complex::Complex32, algorithm::Radix4};
 use serde::{Serialize, Serializer};
+use futures::{stream::{Stream, StreamExt, Buffered, Map, ReadyChunks}, Future, FutureExt, future};
+use tokio::{io::{BufReader}};
 
-use std::{io::{BufReader, Write}, collections::VecDeque};
-use std::fs::File;
+use std::{io::{Write}, fs::File, collections::VecDeque, sync::MutexGuard, ops::Deref};
+// use std::fs::File;
 use std::f32::consts::PI;
 use std::ops::DerefMut;
 use std::sync::{Arc, Mutex};
@@ -20,6 +20,9 @@ const HOP_SIZE: usize = 127;
 const MAX_DB: f32 = 60.0;
 const MIN_DB: f32 = 10.0;
 const MAX_FREQ: usize = 3000;
+
+// 8k items
+const SAMPLE_BUFFER_LEN: usize = 1 << 13;
 
 // trait AvProfile {
 //     fn set_led_colors(&mut self, led_colors: &mut [Color], fft_mag_db: &[f32]);
@@ -87,7 +90,7 @@ impl Av {
                 stft_output_db: Vec::new(),
                 instance_intensity: Vec::new(),
             },
-            av_data_queue: Arc::new(Mutex::new(VecDeque::new())),
+            av_data_queue: SharedAvData::new(),
             next_av_data: None
         }
     }
@@ -182,12 +185,32 @@ impl Av {
 
     pub fn play(&mut self, source_file: &str) {
         let mut source = AvSource::new();
-        source.play(source_file, Arc::clone(&self.av_data_queue));
+        source.play(source_file, self.av_data_queue.clone());
         self.source = Some(source);
     }
 }
 
-pub type SharedAvData = Arc<Mutex<VecDeque<AvData>>>;
+// pub type SharedAvData = SharedQueue<AvData>;
+
+// pub struct LockedQueue<'a, T> {
+//     inner: MutexGuard<'a, VecDeque<T>>
+// }
+
+// impl<'a, T> LockedQueue<'a, T> {
+//     pub fn push(&mut self, item: T) {
+//         self.inner.deref_mut().push_back(item);
+//     }
+
+//     pub fn pop(&mut self) -> Option<T> {
+//         self.inner.deref_mut().pop_front()
+//     }
+// }
+
+// impl<T> Clone for SharedQueue<T> {
+//     fn clone(&self) -> Self {
+//         Self { inner: Arc::clone(&self.inner) }
+//     }
+// }
 
 #[derive(Clone)]
 pub struct AvData {
@@ -202,18 +225,86 @@ pub struct ProcessedData {
     stft_output_db: Vec<Vec<f32>>,
     pub instance_intensity: Vec<[f32; crate::NUM_INSTANCES as usize]>,
 }
-
-pub struct AvSource {
-    sample_idx_update_count: usize,
-    // resample_count: usize,
-    // shared_: SharedFrameIndex,
-    host: Host,
-    device: Device,
-    config: StreamConfig, 
-    stream: Option<Stream>,
-    // processed_data: &'a ProcessedData
-    // av_data_queue: SharedAvQueue<'a>,
+struct Resampler<T: Stream<Item = f32>> {
+    from_rate: u32,
+    to_rate: u32,
+    channels: u32,
+    buffer: VecDeque<f32>,
+    source: ReadyChunks<T>,
 }
+
+impl<T: Stream<Item = f32> + Unpin> Resampler<T> {
+    fn new(input_stream: T, sample_count: usize, from_rate: u32, to_rate: u32, channels: u32) -> Self {
+        Self {
+            buffer: VecDeque::new(),
+            source: input_stream.ready_chunks(sample_count),
+            from_rate,
+            to_rate,
+            channels,
+        }
+    }
+}
+
+impl<T: Stream<Item = f32>> Stream for Resampler<T> where T::Item: future::Future {
+    type Item = T::Item;
+
+    fn poll_next(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
+        if self.buffer.len() == 0 {
+            tokio::spawn(async move {
+                if let Some(buffer) = self.source.next().await {
+                    self.buffer = VecDeque::from(resample(
+                        self.from_rate, 
+                        self.to_rate, 
+                        self.channels, 
+                        buffer.as_slice(),
+                    ).expect("could not resample"));
+                }
+            });
+        }
+
+    }
+}
+
+struct AsyncDecoder {
+    inner: Decoder<File>,
+}
+
+impl futures::stream::Stream for AsyncDecoder {
+    type Item = future::Ready<f32>;
+
+    fn poll_next(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
+        std::task::Poll::Ready( 
+            match self.inner.next() {
+                Some(val) => Some(future::ready(val as f32 / i16::MAX as f32)),
+                None => None,
+            }
+        )
+    }
+}
+
+impl AsyncDecoder {
+    fn new(source_file: &str) -> Self {
+        AsyncDecoder {
+            inner: Decoder::new(File::open(source_file).unwrap()).unwrap(),
+        }
+    }
+}
+
+// impl Deref for AsyncDecoder {
+//     type Target = Decoder<File>;
+
+//     fn deref(&self) -> &Self::Target {
+//         &self.inner
+//     }
+// }
+
+// impl futures::Stream for AsyncDecoder {
+//     type Item = ;
+
+//     fn poll_next(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
+//         todo!()
+//     }
+// }
 
 impl AvSource {
     pub fn new() -> Self {
@@ -230,58 +321,45 @@ impl AvSource {
 
 
         Self {
-            host,
             device,
-            sample_idx_update_count: (config.sample_rate.0 / (crate::MAX_INSTANCE_UPDATE_RATE_HZ)) as usize,
             config,
-            stream: None,
+            output_stream: None,
             // processed_data,
             // resample_count: 1024,
             // av_data_queue,
         }
     }
 
-    pub fn play(&mut self, source_file: &str, av_data_queue: SharedAvData) {
-        let pre_conversion_sample_buffer = Decoder::new(
-            BufReader::new(File::open(source_file).unwrap())
-        ).unwrap();
-        let sample_rate = pre_conversion_sample_buffer.sample_rate();
-        let channels = pre_conversion_sample_buffer.channels();
+    pub fn play(&mut self, source_file: &str) {
+        let decoder = AsyncDecoder::new(source_file);
+        let source_sample_rate = decoder.inner.sample_rate();
+        let source_channels = decoder.inner.channels();
 
-        // TODO don't load this all at once
-        let pre_conversion_sample_buffer: Vec<_> = pre_conversion_sample_buffer.map(|val| val as f32 / i16::MAX as f32).collect();
-        println!("loaded raw sample buffer");
+        let target_sample_rate = self.config.sample_rate.0;
 
-        let sample_idx_update_count = self.sample_idx_update_count;
-        // let processed_data: &'a ProcessedData = self.processed_data;
+        // buffer is 1 second of samples
+        let raw_samples = decoder.buffered(target_sample_rate);
 
+        let output_samples = Resampler::new(raw_samples, target_sample_rate);
+
+        let sample_idx_update_count =(self.config.sample_rate.0 / (crate::MAX_INSTANCE_UPDATE_RATE_HZ)) as usize;
         let mut current_sample_index = 0;
-
-        // TODO don't load this all at once
-        let sample_buffer = resample(
-            sample_rate, 
-            self.config.sample_rate.0, 
-            channels.into(), 
-            &pre_conversion_sample_buffer.as_slice(),
-        ).unwrap();
-        println!("resampled the buffer");
 
         let data_callback = move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
             let callback_time = std::time::Instant::now();
             for i in 0..data.len() {
-                if current_sample_index % sample_idx_update_count == 0 {
-                    // *shared_frame_index.lock().unwrap().deref_mut() = current_sample_index / sample_idx_update_count;
-                    av_data_queue.lock().unwrap().deref_mut().push_back(AvData {
-                        callback_time,
-                        playback_delay: info.timestamp().playback.duration_since(&info.timestamp().callback).unwrap(),
-                        frame_index: current_sample_index / HOP_SIZE,
-                    });
-                }
+                // if current_sample_index % sample_idx_update_count == 0 {
+                //     av_data_queue.push(AvData {
+                //         callback_time,
+                //         playback_delay: info.timestamp().playback.duration_since(&info.timestamp().callback).unwrap(),
+                //         frame_index: current_sample_index / HOP_SIZE,
+                //     });
+                // }
 
-                // TODO support when file is mono but device is stereo
-                data[i] = sample_buffer[current_sample_index];
+                // // TODO support when file is mono but device is stereo
+                // data[i] = sample_buffer[current_sample_index];
 
-                current_sample_index += 1;
+                // current_sample_index += 1;
             }
         };
         let error_callback = |err| {
@@ -295,6 +373,6 @@ impl AvSource {
 
         stream.play().unwrap();
 
-        self.stream = Some(stream);
+        self.output_stream = Some(stream);
     }
 }

@@ -1,4 +1,5 @@
 use std::{iter, time::Duration, sync::{Arc, Mutex}, ops::{DerefMut, Deref}};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use cgmath::{InnerSpace, Rotation3, Zero};
 use cpal::StreamInstant;
 use rodio::Source;
@@ -504,14 +505,13 @@ impl Context {
 
         let epsilon = Duration::from_millis(MAX_AUDIO_DRIFT_MS as u64);
         let av_data = {
-            let mut lock = self.av.av_data_queue.lock().unwrap();
-            let queue = lock.deref_mut();
+            let mut queue = self.av.av_data_queue.lock();
             // let mut next_av_data = None;
             
             match self.av.next_av_data {
                 // if there's nothing in the queue, we can't do anything
                 None => {
-                    self.av.next_av_data = queue.pop_front();
+                    self.av.next_av_data = queue.pop();
                     return Err(());
                 },
                 Some(ref data) => {
@@ -520,11 +520,11 @@ impl Context {
                         return Err(());
                     } else if data.playback_delay + epsilon < data.callback_time.elapsed() {
                         // if we're greater than epsilon after the time that the front sample should play, then move on to the next one
-                        self.av.next_av_data = queue.pop_front();
+                        self.av.next_av_data = queue.pop();
                         return Err(());
                     } else {
                         let result = data.clone();
-                        self.av.next_av_data = queue.pop_front();
+                        self.av.next_av_data = queue.pop();
                         result
 
                     }
@@ -613,8 +613,8 @@ impl Context {
 
 }
 
-fn main() {
-    env_logger::init();
+#[tokio::main]
+async fn main() {
     let event_loop = EventLoop::new();
     let title = env!("CARGO_PKG_NAME");
     let window = winit::window::WindowBuilder::new()
@@ -622,8 +622,7 @@ fn main() {
         .build(&event_loop)
         .unwrap();
 
-
-    let mut state = pollster::block_on(Context::new(&window));
+    let mut state = Context::new(&window).await;
 
     // let mut last_model_update = std::time::Instant::now();
     event_loop.run(move |event, _, control_flow| {
@@ -634,7 +633,7 @@ fn main() {
         *control_flow = ControlFlow::Poll;
 
         // let's not get crazy fast here
-        while state.last_frame_update.elapsed() < std::time::Duration::from_millis(1) {}
+        // while state.last_frame_update.elapsed() < std::time::Duration::from_millis(1) {
 
         match state.update() {
             // if updated successfully, then render
@@ -678,8 +677,6 @@ fn main() {
                     }
                 }
             }
-            // Event::RedrawRequested(window_id) if window_id == window.id() => {
-            // }
             _ => {}
         }
     });
