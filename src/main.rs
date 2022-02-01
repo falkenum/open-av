@@ -1,6 +1,7 @@
 use std::{ops::{DerefMut, Deref}, iter};
 
 use async_std::{sync::{Arc, Mutex}, channel::Send};
+use log::error;
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, time::Instant};
 use cgmath::{InnerSpace, Rotation3, Zero};
 use cpal::StreamInstant;
@@ -536,6 +537,8 @@ impl Context {
         // };
 
         self.av.av_data_receiver.changed().await.expect("await error");
+        error!("received av data in update()");
+
         let mut lock = self.instances.lock().await;
         let instances = lock.deref_mut();
         for i in 0..instances.len() {
@@ -632,13 +635,11 @@ async fn main() {
     let mut state = Context::new(&window).await;
 
     event_loop.run(move |event, _, control_flow| {
-        pollster::block_on( async {
-            state.update().await;
-            // while state.last_frame_update.elapsed() < tokio::time::Duration::from_secs(1) / FPS {}
-        });
         // try to update at a rate of at most 200 Hz
         // while state.last_frame_update.elapsed() < std::time::Duration::from_millis(1) {}
         // state.last_frame_update = std::time::Instant::now();
+        pollster::block_on(state.update());
+
         match state.render() {
             Ok(_) => {}
             // Reconfigure the surface if lost

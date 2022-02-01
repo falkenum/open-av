@@ -110,7 +110,7 @@ fn start_decode_loop(to_processor: watch::Sender<Vec<f32>>, to_resampler: watch:
         loop {
             match decoder.next().await {
                 Some(data) => {
-                    to_processor.send(data).expect("couldn't send");
+                    to_processor.send(data.clone()).expect("couldn't send");
                     to_resampler.send(data).expect("couldn't send");
                 },
 
@@ -123,12 +123,8 @@ fn start_decode_loop(to_processor: watch::Sender<Vec<f32>>, to_resampler: watch:
 
 #[derive(Debug)]
 struct ProcessedData {
-    sample_offset: usize,
+    // sample_offset: usize,
     instance_intensity: [f32; crate::NUM_INSTANCES as usize],
-}
-
-enum ProcessorState {,
-
 }
 
 fn start_process_loop(to_output: watch::Sender<ProcessedData>, mut from_decoder: watch::Receiver<Vec<f32>>, sample_rate: u32, channels: u32) {
@@ -142,79 +138,76 @@ fn start_process_loop(to_output: watch::Sender<ProcessedData>, mut from_decoder:
         // let from_decoder_stream = from_decoder.into_stream();
 
         // let start_time = std::time::Instant::now();
-        let mut sample_offset = 0;
+        // let mut sample_offset = 0;
         let mut sample_queue = VecDeque::new();
-        let mut fft_buffer_idx = 0;
         loop {
             from_decoder.changed().await.expect("couldn't receive");
-            sample_queue.extend(from_decoder.borrow().deref().iter().cloned());
-
+            let samples = from_decoder.borrow();
+            sample_queue.extend(samples.iter().cloned());
+            error!("received vec of size {} in processor", samples.len());
             while sample_queue.len() >= channels as usize * WINDOW_SIZE {
+                let samples = sample_queue.make_contiguous();
 
-                while fft_buffer_idx < WINDOW_SIZE {
+                for fft_buffer_idx in 0..WINDOW_SIZE {
                     let sample = match channels {
                         1 => {
-                            sample_queue.pop_front().unwrap()
+                            samples[fft_buffer_idx * channels as usize]
                         },
                         2 => {
-                            (sample_queue.pop_front().unwrap() + sample_queue.pop_front().unwrap()) / 2.0
+                            (samples[fft_buffer_idx * channels as usize] + samples[fft_buffer_idx * channels as usize + 1]) / 2.0
                         },
                         _ => panic!(),
                     };
 
                     let windowed_val = sample * (a0 - (1.0 - a0) * (2.0 * PI * fft_buffer_idx as f32 / WINDOW_SIZE as f32).cos());
                     fft_buffer[fft_buffer_idx] = Complex32::from(windowed_val);
+                }
 
-                    fft_buffer_idx += 1;
+                for _ in 0..(HOP_SIZE * channels as usize) {
+                    sample_queue.pop_front().unwrap();
                 }
 
                 for i in WINDOW_SIZE..FFT_SIZE {
                     fft_buffer[i] = Complex32::from(0.0);
                 }
-                fft_buffer_idx = 0;
-            }
+                fft_handle.process_with_scratch(&mut fft_buffer, &mut fft_scratch);
 
-            if fft_buffer_idx == WINDOW_SIZE {
-            }
-
-            fft_handle.process_with_scratch(&mut fft_buffer, &mut fft_scratch);
-
-            let mut fft_mag_db = [0.0f32; FFT_SIZE/2];
-            for i in 0..(FFT_SIZE/2) {
-                fft_mag_db[i] = 20.0 * fft_buffer[i].norm().log10();
-                if fft_mag_db[i] > MAX_DB {
-                    fft_mag_db[i] = MAX_DB;
+                let mut fft_mag_db = [0.0f32; FFT_SIZE/2];
+                for i in 0..(FFT_SIZE/2) {
+                    fft_mag_db[i] = 20.0 * fft_buffer[i].norm().log10();
+                    if fft_mag_db[i] > MAX_DB {
+                        fft_mag_db[i] = MAX_DB;
+                    }
                 }
-            }
 
-            sample_offset += HOP_SIZE;
+                // sample_offset += HOP_SIZE;
 
-            let max_bin = FFT_SIZE * MAX_FREQ / sample_rate as usize;
-            let bins_per_instance = max_bin as f32 / crate::NUM_INSTANCES as f32;
+                let max_bin = FFT_SIZE * MAX_FREQ / sample_rate as usize;
+                let bins_per_instance = max_bin as f32 / crate::NUM_INSTANCES as f32;
 
-            let mut dominant_bin_per_instance = [-1i32; crate::NUM_INSTANCES as usize];
+                let mut dominant_bin_per_instance = [-1i32; crate::NUM_INSTANCES as usize];
 
-            for i in 0..max_bin {
-                let instance_num = (i as f32 / max_bin as f32 * crate::NUM_INSTANCES as f32) as usize;
+                for i in 0..max_bin {
+                    let instance_num = (i as f32 / max_bin as f32 * crate::NUM_INSTANCES as f32) as usize;
 
-                if dominant_bin_per_instance[instance_num] == -1 || fft_mag_db[i] > fft_mag_db[dominant_bin_per_instance[instance_num] as usize] {
-                    dominant_bin_per_instance[instance_num] = i as i32;
+                    if dominant_bin_per_instance[instance_num] == -1 || fft_mag_db[i] > fft_mag_db[dominant_bin_per_instance[instance_num] as usize] {
+                        dominant_bin_per_instance[instance_num] = i as i32;
+                    }
                 }
-            }
 
-            let mut instance_intensity = [0.0f32; crate::NUM_INSTANCES as usize];
-            for i in 0..NUM_INSTANCES as usize {
-                instance_intensity[i] = fft_mag_db[dominant_bin_per_instance[i] as usize] / MAX_DB;
+                let mut instance_intensity = [0.0f32; crate::NUM_INSTANCES as usize];
+                for i in 0..NUM_INSTANCES as usize {
+                    instance_intensity[i] = fft_mag_db[dominant_bin_per_instance[i] as usize] / MAX_DB;
 
-                if instance_intensity[i] < 0.0 {
-                    instance_intensity[i] = 0.0;
+                    if instance_intensity[i] < 0.0 {
+                        instance_intensity[i] = 0.0;
+                    }
                 }
-            }
 
-            to_output.send(ProcessedData {
-                instance_intensity,
-                sample_offset,
-            }).expect("couldn't send");
+                to_output.send(ProcessedData {
+                    instance_intensity,
+                }).expect("couldn't send");
+            }
         }
     });
 
@@ -290,7 +283,7 @@ impl Av {
         let (to_data_cb_from_resampler, from_resampler_to_data_cb) =  watch::channel(Vec::new());
         let (to_data_cb_from_processor, from_processor_to_data_cb) =  watch::channel(ProcessedData {
             instance_intensity: [0.0; crate::NUM_INSTANCES as usize],
-            sample_offset: 0,
+            // sample_offset: 0,
         });
         let (to_graphics_from_data_cb, from_data_cb_to_graphics) =  watch::channel(
             AvData {
@@ -319,36 +312,39 @@ impl Av {
 
         let data_callback = move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
             let state= Arc::clone(&channels);
+            let mut sample_queue = VecDeque::new();
             pollster::block_on(async move {
                 let mut lock = state.lock().await;
                 let state = lock.deref_mut();
 
-                for i in 0..data.len() {
-                    if current_sample_index % output_update_sample_count == 0 {
-                        let receiver = &mut state.from_processor;
-                        let av_data = match receiver.changed().await {
-                            Ok(_) => {
-                                AvData {
-                                    instance_intensity: receiver.borrow_and_update().instance_intensity,
-                                    callback_time: tokio::time::Instant::from_std(std::time::Instant::now()),
-                                    playback_delay: info.timestamp().playback.duration_since(&info.timestamp().callback).unwrap()
-                                }
-                            },
-                            Err(_) => panic!(),
-                        };
-                        let sender = &mut state.to_graphics;
-                        sender.send(av_data).expect("could not send");
-                    }
-                    
-                    let receiver = &mut state.from_resampler;
-                    data[i] = match receiver.changed().await {
-                        Ok(_) => *receiver.borrow_and_update().deref(),
-                        Err(_) => panic!()
+                let receiver = &mut state.from_processor;
+                if receiver.has_changed().unwrap() {
+                    let av_data = AvData {
+                        instance_intensity: receiver.borrow_and_update().instance_intensity,
+                        callback_time: tokio::time::Instant::from_std(std::time::Instant::now()),
+                        playback_delay: info.timestamp().playback.duration_since(&info.timestamp().callback).unwrap()
                     };
-                    error!("slice of size {} to data cb", data.len());
 
-                    current_sample_index += 1;
+                    let sender = &mut state.to_graphics;
+                    sender.send(av_data).expect("could not send");
                 }
+                
+                let receiver = &mut state.from_resampler;
+                if sample_queue.len() < data.len() {
+                    match receiver.changed().await {
+                        Ok(_) => {
+                            let samples = receiver.borrow_and_update();
+                            error!("received vec of size {} in data cb", samples.len());
+                            sample_queue.extend(samples.iter().cloned());
+                        },
+                        _ => panic!(),
+                    }
+                }
+                for i in 0..data.len() {
+                    data[i] = sample_queue.pop_front().unwrap();
+                }
+
+                // current_sample_index += 1;
             })
         };
         let error_callback = |err| {
