@@ -84,56 +84,58 @@ pub struct AvData {
 fn start_resample_loop(to_data_cb: watch::Sender<Vec<f32>>, mut from_decoder: watch::Receiver<Vec<f32>>, from_rate: u32, to_rate: u32, channels: u32) {
 
     tokio::spawn( async move {
+        // let mut from_decoder_stream = ReceiverStream { inner: from_decoder }
+        //     .map( 
+        //         |v | future::ready(v)
+        //     ).buffered(1);
         loop {
-            match from_decoder.changed().await {
+            if from_decoder.has_changed().unwrap() {
+                error!("received vec of size {} in resampler", from_decoder.borrow().len());
+                let result = resample(
+                    from_rate, 
+                    to_rate, 
+                    channels, 
+                    from_decoder.borrow_and_update().as_slice(),
+                ).expect("could not resample");
 
-                Ok(_) => {
-                    error!("received vec of size {} in resampler", from_decoder.borrow().len());
-                    let result = resample(
-                        from_rate, 
-                        to_rate, 
-                        channels, 
-                        from_decoder.borrow().as_slice(),
-                    ).expect("could not resample");
-
-                    to_data_cb.send(result).expect("couldn't send");
-                },
-                Err(_) => panic!(),
+                to_data_cb.send(result).expect("couldn't send");
             }
+            // tokio::task::yield_now().await;
         }
     });
 }
 
 fn start_decode_loop(to_processor: watch::Sender<Vec<f32>>, to_resampler: watch::Sender<Vec<f32>>, buffer_capacity: usize, decoder: Decoder<std::fs::File>) {
     tokio::spawn(async move {
-        let mut decoder = AsyncDecoder { inner: decoder, _phantom: PhantomData }.chunks(buffer_capacity);
+        let mut decoder = IteratorStream::new(decoder).map(|val| val as f32 / i16::MAX as f32 ).chunks(buffer_capacity);
         loop {
             match decoder.next().await {
                 Some(data) => {
                     to_processor.send(data.clone()).expect("couldn't send");
+                    error!("sending vec of size {} from decoder", data.len());
                     to_resampler.send(data).expect("couldn't send");
                 },
 
-                // TODO maybe don't keep reading next, but go to sleep
                 None => (),
             }
         }
     });
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ProcessedData {
     // sample_offset: usize,
     instance_intensity: [f32; crate::NUM_INSTANCES as usize],
 }
 
-fn start_process_loop(to_output: watch::Sender<ProcessedData>, mut from_decoder: watch::Receiver<Vec<f32>>, sample_rate: u32, channels: u32) {
+fn start_process_loop(to_data_cb: watch::Sender<ProcessedData>, from_decoder: watch::Receiver<Vec<f32>>, sample_rate: u32, channels: u32) {
     tokio::spawn( async move {
         // let sem = Semaphore::new(2);
         let mut fft_buffer = [Complex32::from(0.0f32); FFT_SIZE];
         let mut fft_scratch = [Complex32::from(0.0f32); FFT_SIZE];
         let fft_handle = Radix4::new(FFT_SIZE, FftDirection::Forward);
         let a0 = 25.0 / 46.0;
+        let mut from_decoder_stream = ReceiverStream {inner: from_decoder}; //.flat_map(|v| IteratorStream::new(v));
         // let mut input_sample_buffer = Vec::new();
         // let from_decoder_stream = from_decoder.into_stream();
 
@@ -141,8 +143,8 @@ fn start_process_loop(to_output: watch::Sender<ProcessedData>, mut from_decoder:
         // let mut sample_offset = 0;
         let mut sample_queue = VecDeque::new();
         loop {
-            from_decoder.changed().await.expect("couldn't receive");
-            let samples = from_decoder.borrow();
+            // from_decoder.changed().await.expect("couldn't receive");
+            let samples = from_decoder_stream.next().await.unwrap();
             sample_queue.extend(samples.iter().cloned());
             error!("received vec of size {} in processor", samples.len());
             while sample_queue.len() >= channels as usize * WINDOW_SIZE {
@@ -204,7 +206,7 @@ fn start_process_loop(to_output: watch::Sender<ProcessedData>, mut from_decoder:
                     }
                 }
 
-                to_output.send(ProcessedData {
+                to_data_cb.send(ProcessedData {
                     instance_intensity,
                 }).expect("couldn't send");
             }
@@ -227,19 +229,31 @@ fn start_process_loop(to_output: watch::Sender<ProcessedData>, mut from_decoder:
     // println!("processing took {} ms ", start_time.elapsed().as_millis());
 }
 
-struct AsyncDecoder<'a> {
-    inner: Decoder<std::fs::File>,
-    _phantom: PhantomData<&'a u8>
+struct IteratorStream<V, I: IntoIterator<Item = V>> {
+    // inner: I,
+    current: <I as IntoIterator>::IntoIter
 }
 
-impl<'a> futures::stream::Stream for AsyncDecoder<'a> {
-    type Item = f32;
+impl<V, I: IntoIterator<Item = V>> IteratorStream<V, I> {
+    fn new(inner: I) -> Self {
+        Self {
+            current: inner.into_iter(),
+        }
+    }
+}
+
+impl<V, I: IntoIterator<Item = V>> Unpin for IteratorStream<V, I> {
+}
+
+impl<V, I: IntoIterator<Item = V>> futures::stream::Stream for IteratorStream<V, I> {
+    type Item = V;
 
     fn poll_next(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
 
-        match self.borrow_mut().inner.next() {
+        match self.current.next() {
             Some(val) => {
-                Poll::Ready(Some(val as f32 / i16::MAX as f32))
+                // cx.waker().wake_by_ref();
+                Poll::Ready(Some(val))
             }
             None => Poll::Pending
         }
@@ -247,15 +261,34 @@ impl<'a> futures::stream::Stream for AsyncDecoder<'a> {
     }
 }
 
-pub struct AvChannels {
+struct ReceiverStream<V: Clone> {
+    inner: watch::Receiver<V>,
+}
+impl<V: Clone> Unpin for ReceiverStream<V> {}
+
+impl<V: Clone> futures::stream::Stream for ReceiverStream<V> {
+    type Item = V;
+
+    fn poll_next(mut self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
+
+        if self.inner.has_changed().unwrap() {
+            Poll::Ready(Some(self.inner.borrow_and_update().clone()))
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+pub struct AvState {
     // _device: Device,
+    sample_queue: VecDeque<f32>,
     to_graphics: watch::Sender<AvData>,
     from_resampler: watch::Receiver<Vec<f32>>,
     from_processor: watch::Receiver<ProcessedData>,
 }
 
 pub struct Av {
-    _channels: Arc<Mutex<AvChannels>>,
+    _state: Arc<Mutex<AvState>>,
     _stream: cpal::Stream,
     pub av_data_receiver: watch::Receiver<AvData>,
 }
@@ -300,52 +333,51 @@ impl Av {
         let output_update_sample_count = (config.sample_rate.0 / (crate::MAX_INSTANCE_UPDATE_RATE_HZ)) as usize;
         let mut current_sample_index = 0;
 
-        let channels = Arc::new(Mutex::new(AvChannels {
+        let state = Arc::new(Mutex::new(AvState {
             // _device: device,
             // _audio_stream: stream,
+
+            sample_queue: VecDeque::new(),
             to_graphics: to_graphics_from_data_cb,
             from_processor: from_processor_to_data_cb,
             from_resampler: from_resampler_to_data_cb,
         })); 
-        let state_clone = Arc::clone(&channels);
+        let state_clone = Arc::clone(&state);
         // let state_clone = Arc::clone(&state);
 
         let data_callback = move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
-            let state= Arc::clone(&channels);
-            let mut sample_queue = VecDeque::new();
-            pollster::block_on(async move {
-                let mut lock = state.lock().await;
-                let state = lock.deref_mut();
+            let state= Arc::clone(&state);
+            let lock = state.try_lock();
+            if let None = lock {
+                return;
+            };
+            let mut lock = lock.unwrap();
+            let state = lock.deref_mut();
 
-                let receiver = &mut state.from_processor;
-                if receiver.has_changed().unwrap() {
-                    let av_data = AvData {
-                        instance_intensity: receiver.borrow_and_update().instance_intensity,
-                        callback_time: tokio::time::Instant::from_std(std::time::Instant::now()),
-                        playback_delay: info.timestamp().playback.duration_since(&info.timestamp().callback).unwrap()
-                    };
+            let receiver = &mut state.from_processor;
+            if receiver.has_changed().unwrap() {
+                let av_data = AvData {
+                    instance_intensity: receiver.borrow_and_update().instance_intensity,
+                    callback_time: tokio::time::Instant::from_std(std::time::Instant::now()),
+                    playback_delay: info.timestamp().playback.duration_since(&info.timestamp().callback).unwrap()
+                };
 
-                    let sender = &mut state.to_graphics;
-                    sender.send(av_data).expect("could not send");
-                }
-                
-                let receiver = &mut state.from_resampler;
-                if sample_queue.len() < data.len() {
-                    match receiver.changed().await {
-                        Ok(_) => {
-                            let samples = receiver.borrow_and_update();
-                            error!("received vec of size {} in data cb", samples.len());
-                            sample_queue.extend(samples.iter().cloned());
-                        },
-                        _ => panic!(),
-                    }
-                }
+                let sender = &mut state.to_graphics;
+                sender.send(av_data).expect("could not send");
+            }
+            
+            let receiver = &mut state.from_resampler;
+            if receiver.has_changed().unwrap() {
+                let samples = receiver.borrow_and_update();
+                error!("received vec of size {} in data cb", samples.len());
+                state.sample_queue.extend(samples.iter().cloned());
+            }
+
+            if state.sample_queue.len() > 0 {
                 for i in 0..data.len() {
-                    data[i] = sample_queue.pop_front().unwrap();
+                    data[i] = state.sample_queue.pop_front().unwrap();
                 }
-
-                // current_sample_index += 1;
-            })
+            }
         };
         let error_callback = |err| {
             panic!("{:?}", err);
@@ -359,7 +391,7 @@ impl Av {
         stream.play().unwrap();
 
         Self {
-            _channels: state_clone,
+            _state: state_clone,
             _stream: stream,
             av_data_receiver: from_data_cb_to_graphics
         }
