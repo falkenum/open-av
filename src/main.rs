@@ -1,7 +1,7 @@
 use std::{ops::{DerefMut, Deref}, iter};
 
 use async_std::{sync::{Arc, Mutex}, channel::Send};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, time::Instant};
 use cgmath::{InnerSpace, Rotation3, Zero};
 use cpal::StreamInstant;
 use rodio::Source;
@@ -17,7 +17,6 @@ mod texture;
 mod camera;
 mod av;
 
-use av::{Av};
 use model::{DrawModel, Vertex};
 use camera::CameraContext;
 
@@ -209,7 +208,8 @@ struct Context {
     light_uniform: LightUniform,
     light_buffer: wgpu::Buffer,
     light_bind_group: wgpu::BindGroup,
-    last_frame_update: std::time::Instant,
+    last_frame_update: tokio::time::Instant,
+    av: av::Av,
 }
 
 trait VisualElement {
@@ -430,20 +430,9 @@ impl Context {
         let instances = Arc::new(Mutex::new(instances));
         let instances_clone = Arc::clone(&instances);
 
+        let source_file = source_path.to_str().unwrap();
 
-        tokio::spawn(async move {
-            let source_file = source_path.to_str().unwrap();
-            let mut av_data_receiver = Av::play(String::from(source_file));
-
-            loop {
-                av_data_receiver.changed().await.expect("error awaiting");
-                let mut lock = instances_clone.lock().await;
-                let instances = lock.deref_mut();
-                for i in 0..instances.len() {
-                    instances[i].pose[1][3] = 25.0 * av_data_receiver.borrow().instance_intensity[i];
-                }
-            }
-        });
+        let av = av::Av::play(String::from(source_file)).await;
 
         Self {
             surface,
@@ -461,8 +450,9 @@ impl Context {
             light_uniform,
             light_buffer,
             light_bind_group,
-            last_frame_update: std::time::Instant::now(),
+            last_frame_update: tokio::time::Instant::now(),
             // animation_start: sd::time::Instant::now(),
+            av,
         }
     }
 
@@ -544,6 +534,13 @@ impl Context {
         //         }
         //     }
         // };
+
+        self.av.av_data_receiver.changed().await.expect("await error");
+        let mut lock = self.instances.lock().await;
+        let instances = lock.deref_mut();
+        for i in 0..instances.len() {
+            instances[i].pose[1][3] = 25.0 * self.av.av_data_receiver.borrow().instance_intensity[i];
+        }
 
 
         self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.instances.lock().await.deref()));
@@ -634,12 +631,10 @@ async fn main() {
 
     let mut state = Context::new(&window).await;
 
-
-    // let mut last_model_update = std::time::Instant::now();
     event_loop.run(move |event, _, control_flow| {
         pollster::block_on( async {
             state.update().await;
-            while state.last_frame_update.elapsed() < tokio::time::Duration::from_secs(1) / FPS {}
+            // while state.last_frame_update.elapsed() < tokio::time::Duration::from_secs(1) / FPS {}
         });
         // try to update at a rate of at most 200 Hz
         // while state.last_frame_update.elapsed() < std::time::Duration::from_millis(1) {}
@@ -655,6 +650,7 @@ async fn main() {
         };
 
         *control_flow = ControlFlow::Poll;
+        state.last_frame_update = Instant::now();
 
 
         match event {
