@@ -1,4 +1,4 @@
-use std::{ops::{DerefMut, Deref}, iter};
+use std::{ops::{DerefMut, Deref}, iter, collections::VecDeque, time::Duration, borrow::Borrow};
 
 use async_std::{sync::{Arc, Mutex}, channel::Send};
 use log::error;
@@ -203,7 +203,7 @@ struct Context {
     // light_render_pipeline: wgpu::RenderPipeline,
     obj_model: model::Model,
     camera_context: camera::CameraContext,
-    instances: Arc<Mutex<Vec<Instance>>>,
+    instances: Vec<Instance>,
     instance_buffer: wgpu::Buffer,
     depth_texture: texture::Texture,
     light_uniform: LightUniform,
@@ -211,6 +211,7 @@ struct Context {
     light_bind_group: wgpu::BindGroup,
     last_frame_update: tokio::time::Instant,
     av: av::Av,
+    av_data_queue: Arc<Mutex<VecDeque<av::AvData>>>,
 }
 
 trait VisualElement {
@@ -428,8 +429,8 @@ impl Context {
             .unwrap().as_path().join("res").join("sounds").join("enter-sandman.wav");
         // let frame_idx = Arc::from(Mutex::from(0usize));
         // let source =  AvSource::new(source_file, Arc::clone(&frame_idx));
-        let instances = Arc::new(Mutex::new(instances));
-        let instances_clone = Arc::clone(&instances);
+        // let instances = Arc::new(Mutex::new(instances));
+        // let instances_clone = Arc::clone(&instances);
 
         let source_file = source_path.to_str().unwrap();
 
@@ -452,7 +453,7 @@ impl Context {
             light_buffer,
             light_bind_group,
             last_frame_update: tokio::time::Instant::now(),
-            // animation_start: sd::time::Instant::now(),
+            av_data_queue: Arc::new(Mutex::new(VecDeque::new())),
             av,
         }
     }
@@ -473,7 +474,7 @@ impl Context {
         self.camera_context.on_input(event)
     }
 
-    async fn update(&mut self) {
+    fn update(&mut self) {
         self.camera_context.update();
 
         // Update the light
@@ -536,19 +537,25 @@ impl Context {
         //     }
         // };
 
-        self.av.av_data_receiver.changed().await.expect("await error");
-        error!("received av data in update()");
+        // self.av.av_data_receiver.changed().await.expect("await error");
+            // error!("received av data in update()");
+        // if now.duration_since(callback_time) > playback_delay {
 
-        let mut lock = self.instances.lock().await;
-        let instances = lock.deref_mut();
-        for i in 0..instances.len() {
-            instances[i].pose[1][3] = 25.0 * self.av.av_data_receiver.borrow().instance_intensity[i];
-        }
-
-
-        self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.instances.lock().await.deref()));
-        self.queue.write_buffer(&self.camera_context.buffer, 0, bytemuck::cast_slice(&[self.camera_context.uniform]));
-        self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
+        pollster::block_on(async {
+            let mut queue_lock = self.av_data_queue.lock().await;
+            if let Some(data) = queue_lock.front() {
+                let playback_delay = data.playback_delay;
+                let callback_time = data.callback_time;
+                if callback_time.elapsed() > playback_delay {
+                    for i in 0..self.instances.len() {
+                        self.instances[i].pose[1][3] = 25.0 * data.instance_intensity[i];
+                    }
+                    self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.instances.deref()));
+                    self.queue.write_buffer(&self.camera_context.buffer, 0, bytemuck::cast_slice(&[self.camera_context.uniform]));
+                    self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
+                    queue_lock.pop_front().unwrap();
+                }          }
+        });
         // for instance in self.instances.iter_mut() {
         //     instance.pose = anim.transforms[i].pose;
         //     instance.normal = anim.transforms[i].normal;
@@ -634,24 +641,41 @@ async fn main() {
 
     let mut state = Context::new(&window).await;
 
-    event_loop.run(move |event, _, control_flow| {
-        // try to update at a rate of at most 200 Hz
-        // while state.last_frame_update.elapsed() < std::time::Duration::from_millis(1) {}
-        // state.last_frame_update = std::time::Instant::now();
-        pollster::block_on(state.update());
+    state.last_frame_update = tokio::time::Instant::now();
+    let av_data_receiver = Arc::clone(&state.av.av_data_receiver);
+    let av_data_queue = Arc::clone(&state.av_data_queue);
 
-        match state.render() {
-            Ok(_) => {}
-            // Reconfigure the surface if lost
-            Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
-            // The system is out of memory, we should probably quit
-            Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
-            // All other errors (Outdated, Timeout) should be resolved by the next frame
-            Err(e) => eprintln!("{:?}", e),
-        };
+    tokio::spawn(async move {
+        loop {
+            let mut receiver_lock = av_data_receiver.lock().await;
+            let mut queue_lock = av_data_queue.lock().await;
+            if receiver_lock.has_changed().unwrap() {
+                let data = receiver_lock.borrow_and_update();
+                queue_lock.push_back(*data);
+            }
+            // error!("queue has {} elements", queue_lock.len());
+        }
+    });
+
+    event_loop.run(move |event, _, control_flow| {
+
+        if state.last_frame_update.elapsed() > std::time::Duration::from_secs(1) / FPS {
+            state.update();
+
+            match state.render() {
+                Ok(_) => {}
+                // Reconfigure the surface if lost
+                Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
+                // The system is out of memory, we should probably quit
+                Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
+                // All other errors (Outdated, Timeout) should be resolved by the next frame
+                Err(e) => eprintln!("{:?}", e),
+            };
+            state.last_frame_update = Instant::now();
+
+        }
 
         *control_flow = ControlFlow::Poll;
-        state.last_frame_update = Instant::now();
 
 
         match event {

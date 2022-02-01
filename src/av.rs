@@ -90,7 +90,7 @@ fn start_resample_loop(to_data_cb: watch::Sender<Vec<f32>>, mut from_decoder: wa
         //     ).buffered(1);
         loop {
             if from_decoder.has_changed().unwrap() {
-                error!("received vec of size {} in resampler", from_decoder.borrow().len());
+                // error!("received vec of size {} in resampler", from_decoder.borrow().len());
                 let result = resample(
                     from_rate, 
                     to_rate, 
@@ -112,8 +112,10 @@ fn start_decode_loop(to_processor: watch::Sender<Vec<f32>>, to_resampler: watch:
             match decoder.next().await {
                 Some(data) => {
                     to_processor.send(data.clone()).expect("couldn't send");
-                    error!("sending vec of size {} from decoder", data.len());
+                    // error!("sending vec of size {} from decoder", data.len());
                     to_resampler.send(data).expect("couldn't send");
+                    let now = tokio::time::Instant::now();
+                    // while now.elapsed() < tokio::time::Duration::from_millis(500) {}
                 },
 
                 None => (),
@@ -123,7 +125,7 @@ fn start_decode_loop(to_processor: watch::Sender<Vec<f32>>, to_resampler: watch:
 }
 
 #[derive(Debug, Clone)]
-struct ProcessedData {
+pub struct ProcessedData {
     // sample_offset: usize,
     instance_intensity: [f32; crate::NUM_INSTANCES as usize],
 }
@@ -135,7 +137,7 @@ fn start_process_loop(to_data_cb: watch::Sender<ProcessedData>, from_decoder: wa
         let mut fft_scratch = [Complex32::from(0.0f32); FFT_SIZE];
         let fft_handle = Radix4::new(FFT_SIZE, FftDirection::Forward);
         let a0 = 25.0 / 46.0;
-        let mut from_decoder_stream = ReceiverStream {inner: from_decoder}; //.flat_map(|v| IteratorStream::new(v));
+        let mut from_decoder_stream = from_decoder; //.flat_map(|v| IteratorStream::new(v));
         // let mut input_sample_buffer = Vec::new();
         // let from_decoder_stream = from_decoder.into_stream();
 
@@ -144,9 +146,11 @@ fn start_process_loop(to_data_cb: watch::Sender<ProcessedData>, from_decoder: wa
         let mut sample_queue = VecDeque::new();
         loop {
             // from_decoder.changed().await.expect("couldn't receive");
-            let samples = from_decoder_stream.next().await.unwrap();
-            sample_queue.extend(samples.iter().cloned());
-            error!("received vec of size {} in processor", samples.len());
+            if from_decoder_stream.has_changed().unwrap() {
+                let samples = from_decoder_stream.borrow_and_update();
+                sample_queue.extend(samples.iter().cloned());
+                // error!("received vec of size {} in processor", samples.len());
+            }
             while sample_queue.len() >= channels as usize * WINDOW_SIZE {
                 let samples = sample_queue.make_contiguous();
 
@@ -290,7 +294,7 @@ pub struct AvState {
 pub struct Av {
     _state: Arc<Mutex<AvState>>,
     _stream: cpal::Stream,
-    pub av_data_receiver: watch::Receiver<AvData>,
+    pub av_data_receiver: Arc<Mutex<watch::Receiver<AvData>>>,
 }
 
 impl Av {
@@ -362,18 +366,22 @@ impl Av {
                     playback_delay: info.timestamp().playback.duration_since(&info.timestamp().callback).unwrap()
                 };
 
-                let sender = &mut state.to_graphics;
-                sender.send(av_data).expect("could not send");
+                if current_sample_index % output_update_sample_count == 0 {
+                    let sender = &mut state.to_graphics;
+                    sender.send(av_data).expect("could not send");
+                    current_sample_index = 0;
+                }
+                // error!("recieved data from procesor in data cb");
             }
             
             let receiver = &mut state.from_resampler;
             if receiver.has_changed().unwrap() {
                 let samples = receiver.borrow_and_update();
-                error!("received vec of size {} in data cb", samples.len());
+                // error!("received vec of size {} in data cb", samples.len());
                 state.sample_queue.extend(samples.iter().cloned());
             }
 
-            if state.sample_queue.len() > 0 {
+            if state.sample_queue.len() >= data.len() {
                 for i in 0..data.len() {
                     data[i] = state.sample_queue.pop_front().unwrap();
                 }
@@ -389,11 +397,12 @@ impl Av {
         ).unwrap();
 
         stream.play().unwrap();
+        current_sample_index += 1;
 
         Self {
             _state: state_clone,
             _stream: stream,
-            av_data_receiver: from_data_cb_to_graphics
+            av_data_receiver: Arc::new(Mutex::new(from_data_cb_to_graphics)),
         }
     }
 }
