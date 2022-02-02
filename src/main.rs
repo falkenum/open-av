@@ -82,7 +82,7 @@ fn create_render_pipeline(
 
 // const NUM_INSTANCES_PER_ROW: u32 = 4;
 const NUM_INSTANCES: u32 = 32;
-const FPS: u32 = 120;
+const FPS: u32 = 60;
 const MAX_INSTANCE_UPDATE_RATE_HZ: u32 = FPS*2;
 const MAX_AUDIO_DRIFT_MS: u32 = 15;
 
@@ -541,22 +541,26 @@ impl Context {
             // error!("received av data in update()");
         // if now.duration_since(callback_time) > playback_delay {
 
+
         pollster::block_on(async {
             let mut queue_lock = self.av_data_queue.lock().await;
-            if let Some(data) = queue_lock.front() {
-                let playback_delay = data.playback_delay;
-                let callback_time = data.callback_time;
-                if callback_time.elapsed() > playback_delay {
+                // find the last processed data that corresponds to before the playback time
+            while let Some(av_data) = queue_lock.front() {
+                let av_data = av_data.clone();
+                queue_lock.pop_front().unwrap();
+                if av_data.callback_time.elapsed() > av_data.playback_delay {
                     for i in 0..self.instances.len() {
-                        self.instances[i].pose[1][3] = 25.0 * data.instance_intensity[i];
+                        self.instances[i].pose[1][3] = 25.0 * av_data.instance_intensity[i];
                     }
-                    self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.instances.deref()));
-                    self.queue.write_buffer(&self.camera_context.buffer, 0, bytemuck::cast_slice(&[self.camera_context.uniform]));
-                    self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
-                    queue_lock.pop_front().unwrap();
+                } else {
+                    break;
                 }
             }
         });
+        self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.instances.deref()));
+        self.queue.write_buffer(&self.camera_context.buffer, 0, bytemuck::cast_slice(&[self.camera_context.uniform]));
+        self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
+
         // for instance in self.instances.iter_mut() {
         //     instance.pose = anim.transforms[i].pose;
         //     instance.normal = anim.transforms[i].normal;
@@ -661,6 +665,8 @@ async fn main() {
     event_loop.run(move |event, _, control_flow| {
 
         if state.last_frame_update.elapsed() > std::time::Duration::from_secs(1) / FPS {
+            state.last_frame_update = Instant::now();
+
             state.update();
 
             match state.render() {
@@ -672,8 +678,6 @@ async fn main() {
                 // All other errors (Outdated, Timeout) should be resolved by the next frame
                 Err(e) => eprintln!("{:?}", e),
             };
-            state.last_frame_update = Instant::now();
-
         }
 
         *control_flow = ControlFlow::Poll;

@@ -126,7 +126,7 @@ fn start_decode_loop(to_processor: watch::Sender<Vec<f32>>, to_resampler: watch:
 
 #[derive(Debug, Clone)]
 pub struct ProcessedData {
-    // sample_offset: usize,
+    sample_offset: usize,
     instance_intensity: [f32; crate::NUM_INSTANCES as usize],
 }
 
@@ -142,7 +142,7 @@ fn start_process_loop(to_data_cb: watch::Sender<ProcessedData>, from_decoder: wa
         // let from_decoder_stream = from_decoder.into_stream();
 
         // let start_time = std::time::Instant::now();
-        // let mut sample_offset = 0;
+        let mut sample_offset = 0;
         let mut sample_queue = VecDeque::new();
         loop {
             // from_decoder.changed().await.expect("couldn't receive");
@@ -186,7 +186,6 @@ fn start_process_loop(to_data_cb: watch::Sender<ProcessedData>, from_decoder: wa
                     }
                 }
 
-                // sample_offset += HOP_SIZE;
 
                 let max_bin = FFT_SIZE * MAX_FREQ / sample_rate as usize;
                 let bins_per_instance = max_bin as f32 / crate::NUM_INSTANCES as f32;
@@ -211,8 +210,11 @@ fn start_process_loop(to_data_cb: watch::Sender<ProcessedData>, from_decoder: wa
                 }
 
                 to_data_cb.send(ProcessedData {
+                    sample_offset,
                     instance_intensity,
                 }).expect("couldn't send");
+
+                sample_offset += HOP_SIZE * channels as usize;
             }
         }
     });
@@ -285,6 +287,7 @@ impl<V: Clone> futures::stream::Stream for ReceiverStream<V> {
 
 pub struct AvState {
     // _device: Device,
+    processed_data_queue: VecDeque<ProcessedData>,
     sample_queue: VecDeque<f32>,
     to_graphics: watch::Sender<AvData>,
     from_resampler: watch::Receiver<Vec<f32>>,
@@ -320,7 +323,7 @@ impl Av {
         let (to_data_cb_from_resampler, from_resampler_to_data_cb) =  watch::channel(Vec::new());
         let (to_data_cb_from_processor, from_processor_to_data_cb) =  watch::channel(ProcessedData {
             instance_intensity: [0.0; crate::NUM_INSTANCES as usize],
-            // sample_offset: 0,
+            sample_offset: 0,
         });
         let (to_graphics_from_data_cb, from_data_cb_to_graphics) =  watch::channel(
             AvData {
@@ -335,12 +338,13 @@ impl Av {
         start_process_loop(to_data_cb_from_processor, from_decoder_to_processor, source_sample_rate, source_channels);
 
         let output_update_sample_count = (config.sample_rate.0 / (crate::MAX_INSTANCE_UPDATE_RATE_HZ)) as usize;
-        let mut current_sample_index = 0;
+        let mut current_sample_index: usize = 0;
 
         let state = Arc::new(Mutex::new(AvState {
             // _device: device,
             // _audio_stream: stream,
 
+            processed_data_queue: VecDeque::new(),
             sample_queue: VecDeque::new(),
             to_graphics: to_graphics_from_data_cb,
             from_processor: from_processor_to_data_cb,
@@ -360,16 +364,18 @@ impl Av {
 
             let receiver = &mut state.from_processor;
             if receiver.has_changed().unwrap() {
+                let processed_data = receiver.borrow_and_update().deref().clone();
+                // current_sample_index = 0;
+                // error!("recieved data from procesor in data cb");
+                let delay = info.timestamp().playback.duration_since(&info.timestamp().callback).unwrap();
+                // let delay = delay + (processed_data.sample_offset - current_sample_index) / ;
                 let av_data = AvData {
-                    instance_intensity: receiver.borrow_and_update().instance_intensity,
-                    callback_time: tokio::time::Instant::from_std(std::time::Instant::now()),
-                    playback_delay: info.timestamp().playback.duration_since(&info.timestamp().callback).unwrap()
+                    instance_intensity: processed_data.instance_intensity,
+                    callback_time: tokio::time::Instant::now(),
+                    playback_delay: 
                 };
-
                 let sender = &mut state.to_graphics;
                 sender.send(av_data).expect("could not send");
-                current_sample_index = 0;
-                // error!("recieved data from procesor in data cb");
             }
             
             let receiver = &mut state.from_resampler;
@@ -383,6 +389,8 @@ impl Av {
                 for i in 0..data.len() {
                     data[i] = state.sample_queue.pop_front().unwrap();
                 }
+
+                current_sample_index += data.len();
             }
         };
         let error_callback = |err| {
@@ -395,7 +403,6 @@ impl Av {
         ).unwrap();
 
         stream.play().unwrap();
-        current_sample_index += 1;
 
         Self {
             _state: state_clone,
