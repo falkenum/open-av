@@ -81,38 +81,36 @@ pub struct AvData {
 //     pub instance_intensity: Vec<[f32; crate::NUM_INSTANCES as usize]>,
 // }
 
-fn start_resample_loop(to_data_cb: watch::Sender<ProcessedData>, mut from_processor: watch::Receiver<ProcessedData>, from_rate: u32, to_rate: u32, channels: u32) {
+fn start_resample_loop(to_processor: watch::Sender<Vec<f32>>, mut from_decoder: watch::Receiver<Vec<f32>>, from_rate: u32, to_rate: u32, channels: u32) {
 
     tokio::spawn( async move {
         loop {
-            if from_processor.has_changed().unwrap() {
-                // error!("received vec of size {} in resampler", from_decoder.borrow().len());
-                let mut processed_data = from_processor.borrow_and_update().clone();
+            if from_decoder.has_changed().unwrap() {
+                let data = from_decoder.borrow_and_update().clone();
                 let result = resample(
                     from_rate, 
                     to_rate, 
                     channels, 
-                    processed_data.samples.as_slice(),
+                    data.as_slice(),
                 ).expect("could not resample");
-                processed_data.samples = result;
 
-                to_data_cb.send(processed_data).expect("couldn't send");
+                to_processor.send(result).expect("couldn't send");
             }
-            // tokio::task::yield_now().await;
         }
     });
 }
 
-fn start_decode_loop(to_processor: watch::Sender<Vec<f32>>, decoder: Decoder<std::fs::File>) {
+fn start_decode_loop(to_resampler: watch::Sender<Vec<f32>>, decoder: Decoder<std::fs::File>) {
     tokio::spawn(async move {
-        let channels = decoder.channels() as usize;
+        // let channels = decoder.channels() as usize;
+        let sample_rate = decoder.sample_rate() as usize;
         let mut decoder = IteratorStream::new(decoder)
             .map(|val| val as f32 / i16::MAX as f32 )
-            .chunks(HOP_SIZE * channels);
+            .chunks(sample_rate); // 1 second chunks
         loop {
             match decoder.next().await {
                 Some(data) => {
-                    to_processor.send(data.clone()).expect("couldn't send");
+                    to_resampler.send(data.clone()).expect("couldn't send");
                     // error!("sending vec of size {} from decoder", data.len());
                     // to_resampler.send(data).expect("couldn't send");
                     // let now = tokio::time::Instant::now();
@@ -133,51 +131,43 @@ pub struct ProcessedData {
     samples: Vec<f32>,
 }
 
-fn start_process_loop(to_resampler: watch::Sender<ProcessedData>, from_decoder: watch::Receiver<Vec<f32>>, sample_rate: u32, channels: u32) {
+fn start_process_loop(to_data_cb: watch::Sender<Vec<ProcessedData>>, mut from_resampler: watch::Receiver<Vec<f32>>, output_sample_rate: u32, channels: u32) {
     tokio::spawn( async move {
         // let sem = Semaphore::new(2);
         let mut fft_buffer = [Complex32::from(0.0f32); FFT_SIZE];
         let mut fft_scratch = [Complex32::from(0.0f32); FFT_SIZE];
         let fft_handle = Radix4::new(FFT_SIZE, FftDirection::Forward);
         let a0 = 25.0 / 46.0;
-        let mut from_decoder_stream = from_decoder; //.flat_map(|v| IteratorStream::new(v));
+        // let mut from_decoder_stream = from_decoder; //.flat_map(|v| IteratorStream::new(v));
         // let mut input_sample_buffer = Vec::new();
         // let from_decoder_stream = from_decoder.into_stream();
 
         // let start_time = std::time::Instant::now();
         // let mut sample_offset = 0;
         let mut sample_queue = VecDeque::new();
+        let mut processed_data_queue = VecDeque::new();
         loop {
             // from_decoder.changed().await.expect("couldn't receive");
-            if from_decoder_stream.has_changed().unwrap() {
-                let samples = from_decoder_stream.borrow_and_update();
+            if from_resampler.has_changed().unwrap() {
+                let samples = from_resampler.borrow_and_update();
                 // assert_eq!(HOP_SIZE * channels as usize, samples.len());
                 sample_queue.extend(samples.iter().cloned());
                 // error!("received vec of size {} in processor", samples.len());
             }
-            while sample_queue.len() >= channels as usize * WINDOW_SIZE {
-                let samples = sample_queue.make_contiguous();
-
-                let output_samples = Vec::from_iter(samples.iter().take(WINDOW_SIZE * channels as usize).cloned());
-
-
+            if sample_queue.len() >= channels as usize * WINDOW_SIZE {
                 for fft_buffer_idx in 0..WINDOW_SIZE {
                     let sample = match channels {
                         1 => {
-                            samples[fft_buffer_idx as usize]
+                            sample_queue.get(fft_buffer_idx as usize).unwrap().clone()
                         },
                         2 => {
-                            (samples[fft_buffer_idx * 2] + samples[fft_buffer_idx * 2 + 1]) / 2.0
+                            (sample_queue.get(fft_buffer_idx * 2).unwrap() + sample_queue.get(fft_buffer_idx * 2 + 1).unwrap()) / 2.0
                         },
                         _ => panic!(),
                     };
 
                     let windowed_val = sample * (a0 - (1.0 - a0) * (2.0 * PI * fft_buffer_idx as f32 / WINDOW_SIZE as f32).cos());
                     fft_buffer[fft_buffer_idx] = Complex32::from(windowed_val);
-                }
-
-                for _ in 0..(HOP_SIZE * channels as usize) {
-                    sample_queue.pop_front().unwrap();
                 }
 
                 for i in WINDOW_SIZE..FFT_SIZE {
@@ -194,8 +184,8 @@ fn start_process_loop(to_resampler: watch::Sender<ProcessedData>, from_decoder: 
                 }
 
 
-                let max_bin = FFT_SIZE * MAX_FREQ / sample_rate as usize;
-                let bins_per_instance = max_bin as f32 / crate::NUM_INSTANCES as f32;
+                let max_bin = FFT_SIZE * MAX_FREQ / output_sample_rate as usize;
+                // let bins_per_instance = max_bin as f32 / crate::NUM_INSTANCES as f32;
 
                 let mut dominant_bin_per_instance = [-1i32; crate::NUM_INSTANCES as usize];
 
@@ -216,13 +206,24 @@ fn start_process_loop(to_resampler: watch::Sender<ProcessedData>, from_decoder: 
                     }
                 }
 
-                to_resampler.send(ProcessedData {
-                    // sample_offset,
+                let mut output_samples = Vec::new();
+                for _ in 0..(HOP_SIZE * channels as usize) {
+                    output_samples.push(sample_queue.pop_front().unwrap());
+                }
+
+                processed_data_queue.push_back(ProcessedData {
                     instance_intensity,
                     samples: output_samples,
-                }).expect("couldn't send");
+                });
 
                 // sample_offset += HOP_SIZE * channels as usize;
+            }
+
+            // if have 1 second of samples, then send
+            if processed_data_queue.len() * HOP_SIZE * channels as usize > output_sample_rate as usize {
+                // flush the queue
+                to_data_cb.send(Vec::from_iter(processed_data_queue.iter().cloned())).expect("couldn't send");
+                processed_data_queue = VecDeque::new();
             }
         }
     });
@@ -296,9 +297,10 @@ impl<V: Clone> futures::stream::Stream for ReceiverStream<V> {
 pub struct AvState {
     // _device: Device,
     // processed_data_queue: VecDeque<ProcessedData>,
-    sample_queue: VecDeque<f32>,
+    processed_data_sample_idx: usize,
+    processed_data_queue: VecDeque<ProcessedData>,
     to_graphics: watch::Sender<AvData>,
-    from_resampler: watch::Receiver<ProcessedData>,
+    from_processor: watch::Receiver<Vec<ProcessedData>>,
     // from_processor: watch::Receiver<ProcessedData>,
 }
 
@@ -329,10 +331,9 @@ impl Av {
             samples: Vec::new(),
         };
 
-        // let (to_resampler_from_decoder, from_decoder_to_resampler) =  watch::channel(Vec::new());
-        let (to_processor_from_decoder, from_decoder_to_processor) =  watch::channel(Vec::new());
-        let (to_resampler_from_processor, from_processor_to_resampler) =  watch::channel(default_processed_data.clone());
-        let (to_data_cb_from_resampler, from_resampler_to_data_cb) =  watch::channel(default_processed_data);
+        let (to_resampler_from_decoder, from_decoder_to_resampler) =  watch::channel(Vec::new());
+        let (to_processor_from_resampler, from_resampler_to_processor) =  watch::channel(Vec::new());
+        let (to_data_cb_from_processor, from_processor_to_data_cb) =  watch::channel(Vec::new());
 
         let (to_graphics_from_data_cb, from_data_cb_to_graphics) =  watch::channel(
             AvData {
@@ -342,22 +343,18 @@ impl Av {
             }
         );
 
-        start_decode_loop(to_processor_from_decoder, decoder);
-        start_resample_loop(to_data_cb_from_resampler, from_processor_to_resampler, source_sample_rate, target_sample_rate, source_channels);
-        start_process_loop(to_resampler_from_processor, from_decoder_to_processor, source_sample_rate, source_channels);
+        start_decode_loop(to_resampler_from_decoder, decoder);
+        start_resample_loop(to_processor_from_resampler, from_decoder_to_resampler, source_sample_rate, target_sample_rate, source_channels);
+        start_process_loop(to_data_cb_from_processor, from_resampler_to_processor, target_sample_rate, source_channels);
 
-        let output_update_sample_count = (config.sample_rate.0 / (crate::MAX_INSTANCE_UPDATE_RATE_HZ)) as usize;
-        let mut current_sample_index: usize = 0;
+        // let output_update_sample_count = (config.sample_rate.0 / (crate::MAX_INSTANCE_UPDATE_RATE_HZ)) as usize;
+        // let mut current_sample_index: usize = 0;
 
         let state = Arc::new(Mutex::new(AvState {
-            // _device: device,
-            // _audio_stream: stream,
-
-            // processed_data_queue: VecDeque::new(),
-            sample_queue: VecDeque::new(),
+            processed_data_sample_idx: 0,
+            processed_data_queue: VecDeque::new(),
             to_graphics: to_graphics_from_data_cb,
-            // from_processor: from_processor_to_data_cb,
-            from_resampler: from_resampler_to_data_cb,
+            from_processor: from_processor_to_data_cb,
         })); 
         let state_clone = Arc::clone(&state);
         // let state_clone = Arc::clone(&state);
@@ -371,26 +368,28 @@ impl Av {
             let mut lock = lock.unwrap();
             let state = lock.deref_mut();
             
-            let receiver = &mut state.from_resampler;
+            let receiver = &mut state.from_processor;
             if receiver.has_changed().unwrap() {
-                let processed_data = receiver.borrow_and_update();
-                // error!("received vec of size {} in data cb", samples.len());
-                state.sample_queue.extend(processed_data.samples.iter().cloned());
-                let av_data = AvData {
-                    instance_intensity: processed_data.instance_intensity,
-                    callback_time: tokio::time::Instant::now(),
-                    playback_delay: info.timestamp().playback.duration_since(&info.timestamp().callback).unwrap(),
-                };
-                
-                state.to_graphics.send(av_data).expect("couldn't send");
+                state.processed_data_queue.extend(receiver.borrow_and_update().iter().cloned());
             }
 
-            if state.sample_queue.len() >= data.len() {
+            // if we have enough data to fill the requested buffer (this should be true almost always)
+            if state.processed_data_queue.len() * HOP_SIZE * source_channels as usize >= data.len() {
                 for i in 0..data.len() {
-                    data[i] = state.sample_queue.pop_front().unwrap();
+                    data[i] = state.processed_data_queue.front().unwrap().samples[state.processed_data_sample_idx];
+                    state.processed_data_sample_idx += 1;
+                    if state.processed_data_sample_idx >= state.processed_data_queue.front().unwrap().samples.len() {
+                        let av_data = AvData {
+                            instance_intensity: state.processed_data_queue.front().unwrap().instance_intensity,
+                            callback_time: tokio::time::Instant::now(),
+                            playback_delay: info.timestamp().playback.duration_since(&info.timestamp().callback).unwrap(),
+                        };
+                    
+                        state.to_graphics.send(av_data).expect("couldn't send");
+                        state.processed_data_queue.pop_front().unwrap();
+                        state.processed_data_sample_idx = 0;
+                    }
                 }
-
-                // current_sample_index += data.len();
             }
         };
         let error_callback = |err| {
