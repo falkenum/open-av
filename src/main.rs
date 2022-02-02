@@ -554,7 +554,8 @@ impl Context {
                     self.queue.write_buffer(&self.camera_context.buffer, 0, bytemuck::cast_slice(&[self.camera_context.uniform]));
                     self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
                     queue_lock.pop_front().unwrap();
-                }          }
+                }
+            }
         });
         // for instance in self.instances.iter_mut() {
         //     instance.pose = anim.transforms[i].pose;

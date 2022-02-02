@@ -366,11 +366,9 @@ impl Av {
                     playback_delay: info.timestamp().playback.duration_since(&info.timestamp().callback).unwrap()
                 };
 
-                if current_sample_index % output_update_sample_count == 0 {
-                    let sender = &mut state.to_graphics;
-                    sender.send(av_data).expect("could not send");
-                    current_sample_index = 0;
-                }
+                let sender = &mut state.to_graphics;
+                sender.send(av_data).expect("could not send");
+                current_sample_index = 0;
                 // error!("recieved data from procesor in data cb");
             }
             
