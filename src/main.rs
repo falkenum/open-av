@@ -547,8 +547,8 @@ impl Context {
                 // find the last processed data that corresponds to before the playback time
             while let Some(av_data) = queue_lock.front() {
                 let av_data = av_data.clone();
-                queue_lock.pop_front().unwrap();
                 if av_data.callback_time.elapsed() > av_data.playback_delay {
+                    queue_lock.pop_front().unwrap();
                     for i in 0..self.instances.len() {
                         self.instances[i].pose[1][3] = 25.0 * av_data.instance_intensity[i];
                     }
