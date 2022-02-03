@@ -1,3 +1,9 @@
 [submodule "external/piston_collada"]
 	path = external/piston_collada
 	url = git@github.com:falkenum/piston_collada.git
+[submodule "external/jack2"]
+	path = external/jack2
+	url = git@github.com:jackaudio/jack2.git
+[submodule "external/rust-jack"]
+	path = external/rust-jack
+	url = git@github.com:RustAudio/rust-jack.git

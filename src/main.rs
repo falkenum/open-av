@@ -21,6 +21,11 @@ mod av;
 use model::{DrawModel, Vertex};
 use camera::CameraContext;
 
+// #[cfg(target_os = "windows")]
+// #[link(name = "jacknet64")]
+// #[link(name = "jackserver64")]
+// #[link(name = "jack64")]
+// extern "C" {}
 
 fn create_render_pipeline(
     device: &wgpu::Device,
@@ -547,7 +552,7 @@ impl Context {
                 // find the last processed data that corresponds to before the playback time
             while let Some(av_data) = queue_lock.front() {
                 let av_data = av_data.clone();
-                if av_data.callback_time.elapsed() > av_data.playback_delay {
+                if av_data.callback_time.elapsed() + tokio::time::Duration::from_millis(30) > av_data.playback_delay {
                     queue_lock.pop_front().unwrap();
                     for i in 0..self.instances.len() {
                         self.instances[i].pose[1][3] = 25.0 * av_data.instance_intensity[i];
