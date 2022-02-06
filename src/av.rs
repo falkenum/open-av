@@ -312,7 +312,7 @@ pub struct Av {
 
 impl Av {
     pub async fn play(source_file: String) -> Self {
-        let (jack_client, jack_client_status) = jack::Client::new("open-av jack client", jack::ClientOptions::empty()).unwrap();
+        // let (jack_client, jack_client_status) = jack::Client::new("open-av jack client", jack::ClientOptions::empty()).unwrap();
         let host = cpal::default_host();
         let device = host.default_output_device().expect("no output device available");
         let mut supported_configs_range = device.supported_output_configs()
