@@ -16,55 +16,12 @@ use async_std::sync::{Arc, Mutex};
 
 use crate::NUM_INSTANCES;
 
-const FFT_SIZE: usize = 512;
-const WINDOW_SIZE: usize = 256;
-const HOP_SIZE: usize = 127;
-const MAX_DB: f32 = 60.0;
-const MIN_DB: f32 = 10.0;
-const MAX_FREQ: usize = 3000;
-
-// 8k items
-const SAMPLE_BUFFER_LEN: usize = 1 << 13;
-
-// trait AvProfile {
-//     fn set_led_colors(&mut self, led_colors: &mut [Color], fft_mag_db: &[f32]);
-// }
-
-// struct Blue {
-//     dominant_bin_per_led: [i32; NUM_LEDS],
-//     sample_rate: usize,
-// }
-
-// impl Blue {
-//     fn new(sample_rate: usize) -> Blue {
-//         Blue {
-//             dominant_bin_per_led: [-1i32; NUM_LEDS],
-//             sample_rate,
-//         }
-//     }
-// }
-
-// impl AvProfile for Blue {
-//     fn set_led_colors(&mut self, led_colors: &mut [Color], fft_mag_db: &[f32]) {
-//         let max_bin = FFT_SIZE * MAX_FREQ / self.sample_rate as usize;
-//         let bins_per_led = max_bin as f32 / NUM_LEDS as f32;
-
-//         self.dominant_bin_per_led = [-1i32; NUM_LEDS];
-
-//         for i in 0..max_bin {
-//             let led_num = (i as f32 / bins_per_led) as usize;
-
-//             if self.dominant_bin_per_led[led_num] == -1 || fft_mag_db[i] > fft_mag_db[self.dominant_bin_per_led[led_num] as usize] {
-//                 self.dominant_bin_per_led[led_num] = i as i32;
-//             }
-//         }
-
-//         for i in 0..NUM_LEDS {
-//             led_colors[i] = Color::rgba(0, 0, 255, (fft_mag_db[self.dominant_bin_per_led[i] as usize] / MAX_DB * 255.0) as u8)
-//         }
-//     }
-// }
-
+const FFT_SIZE: usize = 2048;
+const WINDOW_SIZE: usize = 1024;
+const HOP_SIZE: usize = 512;
+const MAX_DB: f32 = 80.0;
+const MAX_FREQ: usize = 10000;
+const MIN_FREQ: usize = 100;
 
 
 #[derive(Debug, Clone, Copy)]
@@ -73,13 +30,6 @@ pub struct AvData {
     pub callback_time: tokio::time::Instant,
     pub playback_delay: tokio::time::Duration,
 }
-
-// #[derive(Serialize)]
-// pub struct ProcessedData {
-//     sample_rate: u32,
-//     stft_output_db: Vec<Vec<f32>>,
-//     pub instance_intensity: Vec<[f32; crate::NUM_INSTANCES as usize]>,
-// }
 
 fn start_resample_loop(to_processor: watch::Sender<Vec<f32>>, mut from_decoder: watch::Receiver<Vec<f32>>, from_rate: u32, to_rate: u32, channels: u32) {
 
@@ -111,10 +61,6 @@ fn start_decode_loop(to_resampler: watch::Sender<Vec<f32>>, decoder: Decoder<std
             match decoder.next().await {
                 Some(data) => {
                     to_resampler.send(data.clone()).expect("couldn't send");
-                    // error!("sending vec of size {} from decoder", data.len());
-                    // to_resampler.send(data).expect("couldn't send");
-                    // let now = tokio::time::Instant::now();
-                    // while now.elapsed() < tokio::time::Duration::from_millis(500) {}
                 },
 
                 None => (),
@@ -138,21 +84,13 @@ fn start_process_loop(to_data_cb: watch::Sender<Vec<ProcessedData>>, mut from_re
         let mut fft_scratch = [Complex32::from(0.0f32); FFT_SIZE];
         let fft_handle = Radix4::new(FFT_SIZE, FftDirection::Forward);
         let a0 = 25.0 / 46.0;
-        // let mut from_decoder_stream = from_decoder; //.flat_map(|v| IteratorStream::new(v));
-        // let mut input_sample_buffer = Vec::new();
-        // let from_decoder_stream = from_decoder.into_stream();
-
-        // let start_time = std::time::Instant::now();
-        // let mut sample_offset = 0;
         let mut sample_queue = VecDeque::new();
         let mut processed_data_queue = VecDeque::new();
         loop {
             // from_decoder.changed().await.expect("couldn't receive");
             if from_resampler.has_changed().unwrap() {
                 let samples = from_resampler.borrow_and_update();
-                // assert_eq!(HOP_SIZE * channels as usize, samples.len());
                 sample_queue.extend(samples.iter().cloned());
-                // error!("received vec of size {} in processor", samples.len());
             }
             if sample_queue.len() >= channels as usize * WINDOW_SIZE {
                 for fft_buffer_idx in 0..WINDOW_SIZE {
@@ -185,12 +123,13 @@ fn start_process_loop(to_data_cb: watch::Sender<Vec<ProcessedData>>, mut from_re
 
 
                 let max_bin = FFT_SIZE * MAX_FREQ / output_sample_rate as usize;
+                let first_bin = FFT_SIZE * MIN_FREQ / output_sample_rate as usize;
                 // let bins_per_instance = max_bin as f32 / crate::NUM_INSTANCES as f32;
 
                 let mut dominant_bin_per_instance = [-1i32; crate::NUM_INSTANCES as usize];
 
-                for i in 0..max_bin {
-                    let instance_num = (i as f32 / max_bin as f32 * crate::NUM_INSTANCES as f32) as usize;
+                for i in first_bin..max_bin {
+                    let instance_num = ((i - first_bin) as f32 / max_bin as f32 * crate::NUM_INSTANCES as f32) as usize;
 
                     if dominant_bin_per_instance[instance_num] == -1 || fft_mag_db[i] > fft_mag_db[dominant_bin_per_instance[instance_num] as usize] {
                         dominant_bin_per_instance[instance_num] = i as i32;
@@ -327,10 +266,6 @@ impl Av {
         let source_sample_rate = decoder.sample_rate();
         let source_channels = decoder.channels() as u32;
         let target_sample_rate = config.sample_rate.0 as u32;
-        let default_processed_data = ProcessedData {
-            instance_intensity: [0.0; crate::NUM_INSTANCES as usize],
-            samples: Vec::new(),
-        };
 
         let (to_resampler_from_decoder, from_decoder_to_resampler) =  watch::channel(Vec::new());
         let (to_processor_from_resampler, from_resampler_to_processor) =  watch::channel(Vec::new());
