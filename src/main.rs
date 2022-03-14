@@ -19,77 +19,9 @@ mod camera;
 mod av;
 
 use mesh::{DrawMesh, Vertex};
-use camera::CameraContext;
-
-// #[cfg(target_os = "windows")]
-// #[link(name = "jacknet64")]
-// #[link(name = "jackserver64")]
-// #[link(name = "jack64")]
-// extern "C" {}
-
-fn create_render_pipeline(
-    device: &wgpu::Device,
-    layout: &wgpu::PipelineLayout,
-    color_format: wgpu::TextureFormat,
-    depth_format: Option<wgpu::TextureFormat>,
-    vertex_layouts: &[wgpu::VertexBufferLayout],
-    shader: wgpu::ShaderModuleDescriptor,
-) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(&shader);
-
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Render Pipeline"),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: "vs_main",
-            buffers: vertex_layouts,
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: "fs_main",
-            targets: &[wgpu::ColorTargetState {
-                format: color_format,
-                blend: Some(wgpu::BlendState {
-                    alpha: wgpu::BlendComponent::REPLACE,
-                    color: wgpu::BlendComponent::REPLACE,
-                }),
-                write_mask: wgpu::ColorWrites::ALL,
-            }],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Back),
-            // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
-            polygon_mode: wgpu::PolygonMode::Fill,
-            // Requires Features::DEPTH_CLIP_CONTROL
-            unclipped_depth: false,
-            // Requires Features::CONSERVATIVE_RASTERIZATION
-            conservative: false,
-        },
-        depth_stencil: depth_format.map(|format| wgpu::DepthStencilState {
-            format,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Less,
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
-        multisample: wgpu::MultisampleState {
-            count: 1,
-            mask: !0,
-            alpha_to_coverage_enabled: false,
-        },
-        multiview: None,
-    })
-}
-
 // const NUM_INSTANCES_PER_ROW: u32 = 4;
 const NUM_INSTANCES: u32 = 32;
 const FPS: u32 = 60;
-const MAX_INSTANCE_UPDATE_RATE_HZ: u32 = FPS*2;
-const MAX_AUDIO_DRIFT_MS: u32 = 15;
 
 // main.rs
 struct Context {
@@ -148,48 +80,6 @@ impl Context {
         };
 
         surface.configure(&device, &config);
-        let camera_context = CameraContext::new(&device, config.width as f32 / config.height as f32);
-
-        // let animation_bind_group_layout =
-        //     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        //         entries: &[
-        //             wgpu::BindGroupLayoutEntry {
-        //                 binding: 0,
-        //                 visibility: wgpu::ShaderStages::VERTEX,
-        //                 ty: wgpu::BindingType::Buffer {
-        //                     has_dynamic_offset: false,
-        //                     ty: wgpu::BufferBindingType::,
-        //                     min_binding_size: None,
-        //                 },
-        //                 count: None,
-        //             },
-        //         ],
-        //         label: Some("animation_bind_group_layout")
-        //     });
-
-        let texture_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
-                label: Some("texture_bind_group_layout"),
-            });
-
 
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -200,14 +90,48 @@ impl Context {
 
         let render_pipeline = {
             let shader = include_wgsl!("shader.wgsl");
-            create_render_pipeline(
-                &device,
-                &render_pipeline_layout,
-                config.format,
-                None,
-                &[mesh::MeshVertex::desc()],
-                shader,
-            )
+            let shader = device.create_shader_module(&shader);
+
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Render Pipeline"),
+                layout: Some(&render_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: "vs_main",
+                    buffers: &[mesh::MeshVertex::desc()],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: "fs_main",
+                    targets: &[wgpu::ColorTargetState {
+                        format: config.format,
+                        blend: Some(wgpu::BlendState {
+                            alpha: wgpu::BlendComponent::REPLACE,
+                            color: wgpu::BlendComponent::REPLACE,
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    // Requires Features::DEPTH_CLIP_CONTROL
+                    unclipped_depth: false,
+                    // Requires Features::CONSERVATIVE_RASTERIZATION
+                    conservative: false,
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview: None,
+            })
         };
         let source_path = std::env::current_dir()
             .unwrap().as_path().join("res").join("sounds").join("enter-sandman.wav");
@@ -267,24 +191,24 @@ impl Context {
         // });
         // self.queue.write_buffer(&self.mesh, 0, bytemuck::cast_slice(&self.instances.deref()));
 
-        let mesh_vertices = [
-            mesh::MeshVertex {
-                position: [0., 0., 0.],
-                color: [1., 1., 1., 1.],
-            },
-            mesh::MeshVertex {
-                position: [1., 1., 0.],
-                color: [1., 1., 1., 1.],
-            },
-            mesh::MeshVertex {
-                position: [1., -1., 0.],
-                color: [1., 1., 1., 1.],
-            },
-        ];
+        // let mesh_vertices = [
+        //     mesh::MeshVertex {
+        //         position: [0., 0., 0.],
+        //         color: [1., 1., 1., 1.],
+        //     },
+        //     mesh::MeshVertex {
+        //         position: [1., 1., 0.],
+        //         color: [1., 1., 1., 1.],
+        //     },
+        //     mesh::MeshVertex {
+        //         position: [1., -1., 0.],
+        //         color: [1., 1., 1., 1.],
+        //     },
+        // ];
 
-        self.queue.write_buffer(&self.mesh.vertex_buffer, 0, bytemuck::cast_slice(&mesh_vertices));
-        self.queue.write_buffer(&self.mesh.index_buffer, 0, bytemuck::cast_slice(&[0, 1, 2]));
-        self.mesh.num_elements = 1;
+        // self.queue.write_buffer(&self.mesh.vertex_buffer, 0, bytemuck::cast_slice(&mesh_vertices));
+        // self.queue.write_buffer(&self.mesh.index_buffer, 0, bytemuck::cast_slice(&[0, 1, 2]));
+        // self.mesh.num_elements = 1;
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -320,6 +244,7 @@ impl Context {
 
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.draw_mesh(&self.mesh)
+            // render_pass.draw(0..3, 0..1)
 
             // render_pass.set_pipeline(&self.light_render_pipeline);
             // render_pass.draw_light_model(

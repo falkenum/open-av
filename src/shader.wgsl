@@ -15,12 +15,12 @@ fn vs_main(
     in: VertexInput,
 ) -> VertexOutput {
     var out: VertexOutput;
-    out.clip_position = vec4<f32>(in.position, 0.0);
+    out.clip_position = vec4<f32>(in.position, 1.0);
     out.color = in.color;
     return out;
 }
 
 [[stage(fragment)]]
 fn fs_main(in: VertexOutput) -> [[location(0)]] vec4<f32> {
-    return in.color;
+    return vec4<f32>(1., 1., 1., 1.);
 }

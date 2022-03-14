@@ -40,26 +40,40 @@ impl Vertex for MeshVertex {
 pub struct Mesh {
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
-    pub num_elements: u32,
+    pub num_indices: u32,
 }
 
 impl Mesh {
     pub fn new(device: &wgpu::Device) -> Self {
+        let mesh_vertices = [
+            MeshVertex {
+                position: [0., 0., 1.],
+                color: [1., 1., 1., 1.],
+            },
+            MeshVertex {
+                position: [1., 1., 0.],
+                color: [1., 1., 1., 1.],
+            },
+            MeshVertex {
+                position: [1., -1., 0.],
+                color: [1., 1., 1., 1.],
+            },
+        ];
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
-            contents: bytemuck::cast_slice(&[0]),
+            contents: bytemuck::cast_slice(&mesh_vertices),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
-            contents: bytemuck::cast_slice(&[0]),
+            contents: bytemuck::cast_slice(&[2u32, 1u32, 0u32]),
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
         });
-        let num_elements = 0;
+        let num_indices = 3;
         Mesh {
             vertex_buffer,
             index_buffer,
-            num_elements,
+            num_indices,
         }
     }
 }
@@ -82,6 +96,6 @@ where
     ) {
         self.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
         self.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        self.draw_indexed(0..mesh.num_elements, 0, 0..1);
+        self.draw_indexed(0..mesh.num_indices, 0, 0..1);
     }
 }
