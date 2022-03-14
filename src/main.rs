@@ -13,12 +13,12 @@ use winit::{
     window::Window,
 };
 
-mod model;
+mod mesh;
 mod texture;
 mod camera;
 mod av;
 
-use model::{DrawModel, Vertex};
+use mesh::{DrawMesh, Vertex};
 use camera::CameraContext;
 
 // #[cfg(target_os = "windows")]
@@ -92,112 +92,6 @@ const MAX_INSTANCE_UPDATE_RATE_HZ: u32 = FPS*2;
 const MAX_AUDIO_DRIFT_MS: u32 = 15;
 
 // main.rs
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct LightUniform {
-    position: [f32; 3],
-    // Due to uniforms requiring 16 byte (4 float) spacing, we need to use a padding field here
-    _padding: u32,
-    color: [f32; 3],
-    // Due to uniforms requiring 16 byte (4 float) spacing, we need to use a padding field here
-    _padding2: u32,
-}
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct Instance {
-    origin: [[f32; 4]; 4], 
-    pose: [[f32; 4]; 4],
-    normal: [[f32; 3]; 3],
-}
-
-// impl Instance {
-//     fn to_raw(&self) -> InstanceRaw {
-//         let model =
-//             cgmath::Matrix4::from_translation(self.position) * cgmath::Matrix4::from(self.rotation);
-//         InstanceRaw {
-//             model: model.into(),
-//             normal: cgmath::Matrix3::from(self.rotation).into(),
-//         }
-//     }
-// }
-
-
-// struct InstanceRaw {
-//     model: [[f32; 4]; 4],
-//     normal: [[f32; 3]; 3],
-// }
-
-impl model::Vertex for Instance {
-    fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
-        use std::mem;
-        wgpu::VertexBufferLayout {
-            array_stride: mem::size_of::<Instance>() as wgpu::BufferAddress,
-            // We need to switch from using a step mode of Vertex to Instance
-            // This means that our shaders will only change to use the next
-            // instance when the shader starts processing a new instance
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 5,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 4]>() as wgpu::BufferAddress,
-                    shader_location: 6,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 8]>() as wgpu::BufferAddress,
-                    shader_location: 7,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 12]>() as wgpu::BufferAddress,
-                    shader_location: 8,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 16]>() as wgpu::BufferAddress,
-                    shader_location: 9,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 20]>() as wgpu::BufferAddress,
-                    shader_location: 10,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 24]>() as wgpu::BufferAddress,
-                    shader_location: 11,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 28]>() as wgpu::BufferAddress,
-                    shader_location: 12,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 32]>() as wgpu::BufferAddress,
-                    shader_location: 13,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 35]>() as wgpu::BufferAddress,
-                    shader_location: 14,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: mem::size_of::<[f32; 38]>() as wgpu::BufferAddress,
-                    shader_location: 15,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-           ],
-        }
-    }
-}
-
-
 struct Context {
     surface: wgpu::Surface,
     device: wgpu::Device,
@@ -205,18 +99,10 @@ struct Context {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     render_pipeline: wgpu::RenderPipeline,
-    // light_render_pipeline: wgpu::RenderPipeline,
-    obj_model: model::Model,
-    camera_context: camera::CameraContext,
-    instances: Vec<Instance>,
-    instance_buffer: wgpu::Buffer,
-    depth_texture: texture::Texture,
-    light_uniform: LightUniform,
-    light_buffer: wgpu::Buffer,
-    light_bind_group: wgpu::BindGroup,
     last_frame_update: tokio::time::Instant,
     av: av::Av,
     av_data_queue: Arc<Mutex<VecDeque<av::AvData>>>,
+    mesh: mesh::Mesh,
 }
 
 trait VisualElement {
@@ -230,8 +116,6 @@ impl Context {
     async fn new(window: &Window) -> Self {
         let size = window.inner_size();
 
-        // The instance is a handle to our GPU
-        // BackendBit::PRIMARY => Vulkan + Metal + DX12 + Browser WebGPU
         let instance = wgpu::Instance::new(wgpu::Backends::VULKAN);
         let surface = unsafe { instance.create_surface(window) };
         let adapter = instance
@@ -307,95 +191,10 @@ impl Context {
             });
 
 
-        const SPACE_BETWEEN: f32 = 3.0;
-
-        let instances = (0..NUM_INSTANCES).map(|i| {
-            let x = i as f32 * SPACE_BETWEEN - NUM_INSTANCES as f32 / 2.0 * SPACE_BETWEEN;
-            Instance { 
-                origin: [[1., 0., 0., x],
-                        [0., 1., 0., 0.],
-                        [0., 0., 1., 0.],
-                        [0., 0., 0., 1.]],
-                pose: [[1., 0., 0., 0.],
-                        [0., 1., 0., 0.],
-                        [0., 0., 1., 0.],
-                        [0., 0., 0., 1.]],
-                normal: [[1., 0., 0.],
-                            [0., 1., 0.],
-                            [0., 0., 1.]],
-            }
-        }).collect::<Vec<_>>();
-
-        let light_uniform = LightUniform {
-            position: [2.0, 2.0, 2.0],
-            _padding: 0,
-            color: [1.0, 1.0, 1.0],
-            _padding2: 0,
-        };
-         // We'll want to update our lights position, so we use COPY_DST
-        let light_buffer = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Light VB"),
-                contents: bytemuck::cast_slice(&[light_uniform]),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            }
-        );
-
-        let light_bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-            label: None,
-        });
-
-        let light_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &light_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: light_buffer.as_entire_binding(),
-            }],
-            label: None,
-        });
-
-        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Instance Buffer"),
-            contents: bytemuck::cast_slice(&instances),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
-
-
-
-        let path = std::env::current_dir().unwrap()
-            .as_path().join("res")
-            .join("blender")
-            .join("cube.dae");
-        let obj_model = model::Model::load(
-            &device,
-            &queue,
-            &texture_bind_group_layout,
-            &path,
-        )
-        .unwrap();
-
-        let depth_texture =
-            texture::Texture::create_depth_texture(&device, &config, "depth_texture");
-
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[
-                    &texture_bind_group_layout,
-                    &camera_context.bind_group_layout,
-                    &light_bind_group_layout,
-                ],
+                bind_group_layouts: &[],
                 push_constant_ranges: &[],
             });
 
@@ -405,58 +204,26 @@ impl Context {
                 &device,
                 &render_pipeline_layout,
                 config.format,
-                Some(texture::Texture::DEPTH_FORMAT),
-                &[model::ModelVertex::desc(), Instance::desc()],
+                None,
+                &[mesh::MeshVertex::desc()],
                 shader,
             )
         };
-        // let light_render_pipeline = {
-        //     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        //         label: Some("Light Pipeline Layout"),
-        //         bind_group_layouts: &[&camera_context.bind_group_layout, &light_bind_group_layout],
-        //         push_constant_ranges: &[],
-        //     });
-        //     let shader = wgpu::ShaderModuleDescriptor {
-        //         label: Some("Light Shader"),
-        //         source: wgpu::ShaderSource::Wgsl(include_str!("light.wgsl").into()),
-        //     };
-        //     create_render_pipeline(
-        //         &device,
-        //         &layout,
-        //         config.format,
-        //         Some(texture::Texture::DEPTH_FORMAT),
-        //         &[model::ModelVertex::desc()],
-        //         shader,
-        //     )
-        //
-        // let source_file = "C:\\Users\\sjfal\\repos\\open-av\\res\\";
         let source_path = std::env::current_dir()
             .unwrap().as_path().join("res").join("sounds").join("enter-sandman.wav");
-        // let frame_idx = Arc::from(Mutex::from(0usize));
-        // let source =  AvSource::new(source_file, Arc::clone(&frame_idx));
-        // let instances = Arc::new(Mutex::new(instances));
-        // let instances_clone = Arc::clone(&instances);
 
         let source_file = source_path.to_str().unwrap();
 
         let av = av::Av::play(String::from(source_file)).await;
 
         Self {
+            mesh: mesh::Mesh::new(&device),
             surface,
             device,
             queue,
             config,
             size,
             render_pipeline,
-            obj_model,
-            camera_context,
-            instances,
-            instance_buffer,
-            depth_texture,
-
-            light_uniform,
-            light_buffer,
-            light_bind_group,
             last_frame_update: tokio::time::Instant::now(),
             av_data_queue: Arc::new(Mutex::new(VecDeque::new())),
             av,
@@ -465,111 +232,59 @@ impl Context {
 
     fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
-            self.camera_context.on_resize(self.config.width as f32, self.config.height as f32);
+            // self.camera_context.on_resize(self.config.width as f32, self.config.height as f32);
             self.size = new_size;
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
-            self.depth_texture =
-                texture::Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
+            // self.depth_texture =
+            //     texture::Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
         }
     }
 
     fn input(&mut self, event: &WindowEvent) -> bool {
-        self.camera_context.on_input(event)
+        // self.camera_context.on_input(event)
+        true
     }
 
     fn update(&mut self) {
-        self.camera_context.update();
+        // self.camera_context.update();
 
-        // Update the light
-        // let old_position: cgmath::Vector3<_> = self.light_uniform.position.into();
-        // self.light_uniform.position =
-        //     (cgmath::Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), cgmath::Deg(1.0))
-        //         * old_position)
-        //         .into();
-        // self.light_uniform.color = {
-        //     let mut new_color = self.light_uniform.color;
-        //     new_color[2] += 0.05;
-        //     if new_color[2] > 1.0 {
-        //         new_color[2] = 0.0;
-        //     }
-
-        //     new_color
-        // };
-
-        // let anim = self.obj_model.meshes[0].animation.clone().unwrap();
-        // // .poses;
-        // // let times = self.obj_model.meshes[0].animation.unwrap().times;
-        // // let elapsed = self.last_frame_update.elapsed();
-        // let now = std::time::Instant::now();
-        // let mut i = 0;
-        // while now - self.animation_start > std::time::Duration::from_millis((anim.times[i] * 1000.0) as u64) {
-        //     i += 1;
-
-        //     if i >= anim.times.len() {
-        //         self.animation_start = now;
-        //         i = 0;
-        //     }
-        // }
-
-        // let epsilon = Duration::from_millis(MAX_AUDIO_DRIFT_MS as u64);
-        // let av_data = {
-        //     // let mut queue = self.av.av_data_queue.lock();
-        //     // let mut next_av_data = None;
-            
-        //     match self.av.next_av_data {
-        //         // if there's nothing in the queue, we can't do anything
-        //         None => {
-        //             self.av.next_av_data = queue.pop();
-        //             return Err(());
-        //         },
-        //         Some(ref data) => {
-        //             if data.playback_delay > data.callback_time.elapsed() + epsilon {
-        //                 // if we're greater than epsilon before the time that the front sample is going to play, then we can't do anything
-        //                 return Err(());
-        //             } else if data.playback_delay + epsilon < data.callback_time.elapsed() {
-        //                 // if we're greater than epsilon after the time that the front sample should play, then move on to the next one
-        //                 self.av.next_av_data = queue.pop();
-        //                 return Err(());
-        //             } else {
-        //                 let result = data.clone();
-        //                 self.av.next_av_data = queue.pop();
-        //                 result
-
+        // pollster::block_on(async {
+        //     let mut queue_lock = self.av_data_queue.lock().await;
+        //         // find the last processed data that corresponds to before the playback time
+        //     while let Some(av_data) = queue_lock.front() {
+        //         let av_data = av_data.clone();
+        //         if av_data.callback_time.elapsed() + tokio::time::Duration::from_millis(30) > av_data.playback_delay {
+        //             queue_lock.pop_front().unwrap();
+        //             for i in 0..self.instances.len() {
+        //                 self.instances[i].pose[1][3] = 25.0 * av_data.instance_intensity[i];
         //             }
+        //         } else {
+        //             break;
         //         }
         //     }
-        // };
+        // });
+        // self.queue.write_buffer(&self.mesh, 0, bytemuck::cast_slice(&self.instances.deref()));
 
-        // self.av.av_data_receiver.changed().await.expect("await error");
-            // error!("received av data in update()");
-        // if now.duration_since(callback_time) > playback_delay {
+        let mesh_vertices = [
+            mesh::MeshVertex {
+                position: [0., 0., 0.],
+                color: [1., 1., 1., 1.],
+            },
+            mesh::MeshVertex {
+                position: [1., 1., 0.],
+                color: [1., 1., 1., 1.],
+            },
+            mesh::MeshVertex {
+                position: [1., -1., 0.],
+                color: [1., 1., 1., 1.],
+            },
+        ];
 
-
-        pollster::block_on(async {
-            let mut queue_lock = self.av_data_queue.lock().await;
-                // find the last processed data that corresponds to before the playback time
-            while let Some(av_data) = queue_lock.front() {
-                let av_data = av_data.clone();
-                if av_data.callback_time.elapsed() + tokio::time::Duration::from_millis(30) > av_data.playback_delay {
-                    queue_lock.pop_front().unwrap();
-                    for i in 0..self.instances.len() {
-                        self.instances[i].pose[1][3] = 25.0 * av_data.instance_intensity[i];
-                    }
-                } else {
-                    break;
-                }
-            }
-        });
-        self.queue.write_buffer(&self.instance_buffer, 0, bytemuck::cast_slice(&self.instances.deref()));
-        self.queue.write_buffer(&self.camera_context.buffer, 0, bytemuck::cast_slice(&[self.camera_context.uniform]));
-        self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
-
-        // for instance in self.instances.iter_mut() {
-        //     instance.pose = anim.transforms[i].pose;
-        //     instance.normal = anim.transforms[i].normal;
-        // }
+        self.queue.write_buffer(&self.mesh.vertex_buffer, 0, bytemuck::cast_slice(&mesh_vertices));
+        self.queue.write_buffer(&self.mesh.index_buffer, 0, bytemuck::cast_slice(&[0, 1, 2]));
+        self.mesh.num_elements = 1;
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -600,24 +315,11 @@ impl Context {
                         store: true,
                     },
                 }],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_texture.view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: true,
-                    }),
-                    stencil_ops: None,
-                }),
+                depth_stencil_attachment: None,
             });
 
-            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.draw_model_instanced(
-                &self.obj_model,
-                0..NUM_INSTANCES as u32,
-                &self.camera_context.bind_group,
-                &self.light_bind_group,
-            );
+            render_pass.draw_mesh(&self.mesh)
 
             // render_pass.set_pipeline(&self.light_render_pipeline);
             // render_pass.draw_light_model(
