@@ -168,7 +168,7 @@ impl Context {
 
     fn input(&mut self, event: &WindowEvent) -> bool {
         // self.camera_context.on_input(event)
-        true
+        false
     }
 
     fn update(&mut self) {
