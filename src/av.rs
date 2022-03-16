@@ -337,7 +337,8 @@ impl Av {
             error_callback,
         ).unwrap();
 
-        stream.play().unwrap();
+        //TODO
+        // stream.play().unwrap();
 
         Self {
             _state: state_clone,
