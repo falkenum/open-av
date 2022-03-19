@@ -1,4 +1,5 @@
 use core::num;
+use std::{borrow::Borrow, collections::VecDeque};
 
 use cgmath::{Rotation3, Rotation, num_traits::Float};
 use wgpu::util::DeviceExt;
@@ -40,11 +41,20 @@ impl Vertex for MeshVertex {
     }
 }
 
-struct Fractal {
+enum TrianglePointType {
+    LEFT,
+    RIGHT,
+    TOP,
+}
+
+pub struct Fractal {
     // counter-clockwise triangle vertices
     base: [cgmath::Vector3<f32>; 3],
     vertices: Vec<cgmath::Vector3<f32>>,
     radius_scale: f32,
+    pub zoom_points: VecDeque<crate::CameraUniform>,
+    next_zoom_point: TrianglePointType,
+    num_layers: u32,
 }
 
 impl Fractal {
@@ -77,6 +87,9 @@ impl Fractal {
             ],
             vertices: Vec::new(),
             radius_scale: scale,
+            zoom_points: VecDeque::new(),
+            next_zoom_point: TrianglePointType::RIGHT,
+            num_layers,
         };
 
         result.add_black_centers(cgmath::vec3(0., 0., 0.), dist_to_line, num_layers);
@@ -100,28 +113,48 @@ impl Fractal {
         self.vertices.push(right + origin);
         self.vertices.push(left + origin);
 
-        let child_origin = q60.rotate_vector(bottom);
-        self.add_black_centers(child_origin + origin, self.radius_scale * radius, depth - 1);
-        let child_origin = q60.rotate_vector(right);
-        self.add_black_centers(child_origin + origin, self.radius_scale * radius, depth - 1);
-        let child_origin = q60.rotate_vector(left);
-        self.add_black_centers(child_origin + origin, self.radius_scale * radius, depth - 1);
+        let right_child_origin = q60.rotate_vector(bottom);
+        let top_child_origin = q60.rotate_vector(right);
+        let left_child_origin = q60.rotate_vector(left);
+
+        let next_zoom_point = match self.next_zoom_point {
+            TrianglePointType::RIGHT => right_child_origin,
+            TrianglePointType::TOP => top_child_origin,
+            TrianglePointType::LEFT => left_child_origin,
+        } + origin;
+
+        self.zoom_points.push_back(
+            crate::CameraUniform { 
+                origin: next_zoom_point.into(),
+                scale: 1.0 / self.radius_scale.powf((self.num_layers - depth) as f32),
+            }
+        );
+
+        // self.next_zoom_point = match self.next_zoom_point {
+        //     TrianglePointType::RIGHT => TrianglePointType::TOP,
+        //     TrianglePointType::TOP => TrianglePointType::LEFT,
+        //     TrianglePointType::LEFT => TrianglePointType::RIGHT,
+        // };
+
+        self.add_black_centers(right_child_origin + origin, self.radius_scale * radius, depth - 1);
+        self.add_black_centers(top_child_origin + origin, self.radius_scale * radius, depth - 1);
+        self.add_black_centers(left_child_origin + origin, self.radius_scale * radius, depth - 1);
     }
 
-    fn into_mesh_vertices(self) -> Vec<MeshVertex> {
+    fn into_mesh_vertices(&self) -> Vec<MeshVertex> {
         let mut result = Vec::new();
         
-        for v in self.base {
+        for v in &self.base {
             result.push(MeshVertex {
                 color: [1., 1., 1., 1.],
-                position: v.into()
+                position: v.clone().into()
             });
         }
 
-        for v in self.vertices {
+        for v in &self.vertices {
             result.push(MeshVertex {
                 color: [0., 0., 0., 1.],
-                position: v.into(),
+                position: v.clone().into(),
             });
         }
 
@@ -129,10 +162,12 @@ impl Fractal {
     }
 }
 
+
 pub struct Mesh {
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
     pub num_indices: u32,
+    pub fractal: Fractal,
 }
 
 impl Mesh {
@@ -156,6 +191,7 @@ impl Mesh {
             vertex_buffer,
             index_buffer,
             num_indices,
+            fractal,
         }
     }
 }

@@ -14,8 +14,6 @@ use winit::{
 };
 
 mod mesh;
-mod texture;
-mod camera;
 mod av;
 
 use mesh::{DrawMesh, Vertex};
@@ -35,13 +33,26 @@ struct Context {
     av: av::Av,
     av_data_queue: Arc<Mutex<VecDeque<av::AvData>>>,
     mesh: mesh::Mesh,
+    camera_bind_group: wgpu::BindGroup,
+    // camera_uniform: CameraUniform,
+    camera_buffer: wgpu::Buffer,
+    camera_uniform_queue: VecDeque<CameraUniform>,
 }
 
-trait VisualElement {
-    fn on_resize(&mut self, _width: f32, _height: f32) {}
-    fn on_input(&mut self, _event: &WindowEvent) -> bool { false }
-    fn on_render(&mut self) {}
-    fn update(&mut self) {}
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct CameraUniform {
+    origin: [f32; 3],
+    scale: f32,
+}
+
+impl CameraUniform {
+    fn new() -> Self {
+        Self {
+            origin: [0.0, 0.0, 0.0],
+            scale: 1.0
+        }
+    }
 }
 
 impl Context {
@@ -81,10 +92,42 @@ impl Context {
 
         surface.configure(&device, &config);
 
+        let camera_uniform = CameraUniform::new();
+        // uniform.update_view_proj(&camera);
+        let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&[camera_uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let camera_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+                label: None,
+            });
+
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &camera_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: camera_buffer.as_entire_binding(),
+            }],
+            label: None,
+        });
+
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[],
+                bind_group_layouts: &[&camera_bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -139,18 +182,46 @@ impl Context {
         let source_file = source_path.to_str().unwrap();
 
         let av = av::Av::play(String::from(source_file)).await;
+        
+        let mut camera_uniform_queue = VecDeque::new();
+        let mut mesh = mesh::Mesh::new(&device);
+        let anim_len = 2.0;
+
+        let num_steps = (anim_len * FPS as f32).ceil() as u32;
+        
+        let mut camera_uniform = CameraUniform::new();
+        while mesh.fractal.zoom_points.len() > 0 {
+
+            let next_zoom_point = mesh.fractal.zoom_points.pop_front().unwrap();
+            let origin_diff = cgmath::Vector3::from(next_zoom_point.origin) - cgmath::Vector3::from(camera_uniform.origin);
+            let origin_step = origin_diff / (anim_len * FPS as f32);
+            let scale_diff = next_zoom_point.scale - camera_uniform.scale;
+            let scale_step = scale_diff / (anim_len * FPS as f32);
+            
+            for _i in 0..num_steps {
+                camera_uniform.origin = (cgmath::Vector3::from(camera_uniform.origin) + origin_step).into();
+                camera_uniform.scale += scale_step;
+
+                camera_uniform_queue.push_back(camera_uniform);
+            }
+
+            camera_uniform = next_zoom_point;
+        }
 
         Self {
-            mesh: mesh::Mesh::new(&device),
+            mesh,
             surface,
             device,
             queue,
             config,
             size,
             render_pipeline,
+            camera_bind_group,
             last_frame_update: tokio::time::Instant::now(),
             av_data_queue: Arc::new(Mutex::new(VecDeque::new())),
             av,
+            camera_buffer,
+            camera_uniform_queue,
         }
     }
 
@@ -208,7 +279,10 @@ impl Context {
 
         // self.queue.write_buffer(&self.mesh.vertex_buffer, 0, bytemuck::cast_slice(&mesh_vertices));
         // self.queue.write_buffer(&self.mesh.index_buffer, 0, bytemuck::cast_slice(&[0, 1, 2]));
-        // self.mesh.num_elements = 1;
+
+        if let Some(next) = self.camera_uniform_queue.pop_front() {
+            self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[next]));
+        }
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -243,6 +317,7 @@ impl Context {
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.draw_mesh(&self.mesh)
             // render_pass.draw(0..3, 0..1)
 
