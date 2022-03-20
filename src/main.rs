@@ -37,6 +37,8 @@ struct Context {
     // camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
     camera_uniform_queue: VecDeque<CameraUniform>,
+    camera_uniform: CameraUniform,
+    next_cu_idx: usize,
 }
 
 #[repr(C)]
@@ -185,27 +187,12 @@ impl Context {
         
         let mut camera_uniform_queue = VecDeque::new();
         let mut mesh = mesh::Mesh::new(&device);
-        let anim_len = 2.0;
 
-        let num_steps = (anim_len * FPS as f32).ceil() as u32;
         
         let mut camera_uniform = CameraUniform::new();
-        while mesh.fractal.zoom_points.len() > 0 {
 
-            let next_zoom_point = mesh.fractal.zoom_points.pop_front().unwrap();
-            let origin_diff = cgmath::Vector3::from(next_zoom_point.origin) - cgmath::Vector3::from(camera_uniform.origin);
-            let origin_step = origin_diff / (anim_len * FPS as f32);
-            let scale_diff = next_zoom_point.scale - camera_uniform.scale;
-            let scale_step = scale_diff / (anim_len * FPS as f32);
-            
-            for _i in 0..num_steps {
-                camera_uniform.origin = (cgmath::Vector3::from(camera_uniform.origin) + origin_step).into();
-                camera_uniform.scale += scale_step;
+        for i in 0..mesh.fractal.zoom_points.len() {
 
-                camera_uniform_queue.push_back(camera_uniform);
-            }
-
-            camera_uniform = next_zoom_point;
         }
 
         Self {
@@ -222,6 +209,8 @@ impl Context {
             av,
             camera_buffer,
             camera_uniform_queue,
+            camera_uniform,
+            next_cu_idx: 0,
         }
     }
 
@@ -280,9 +269,35 @@ impl Context {
         // self.queue.write_buffer(&self.mesh.vertex_buffer, 0, bytemuck::cast_slice(&mesh_vertices));
         // self.queue.write_buffer(&self.mesh.index_buffer, 0, bytemuck::cast_slice(&[0, 1, 2]));
 
-        if let Some(next) = self.camera_uniform_queue.pop_front() {
-            self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[next]));
+        let anim_len = 2.0;
+        if self.camera_uniform_queue.len() == 0 {
+            let num_steps = (anim_len * FPS as f32).ceil() as u32;
+            let next_zoom_point = self.mesh.fractal.zoom_points[self.next_cu_idx];
+
+            let origin_diff = cgmath::Vector3::from(next_zoom_point.origin) - cgmath::Vector3::from(self.camera_uniform.origin);
+            let origin_step = origin_diff / (anim_len * FPS as f32);
+            let scale_diff = next_zoom_point.scale - self.camera_uniform.scale;
+            let scale_step = scale_diff / (anim_len * FPS as f32);
+            
+            for _i in 0..num_steps {
+                self.camera_uniform.origin = (cgmath::Vector3::from(self.camera_uniform.origin) + origin_step).into();
+                self.camera_uniform.scale += scale_step;
+
+                self.camera_uniform_queue.push_back(self.camera_uniform);
+            }
+
+            self.next_cu_idx += 1;
+
+            if self.next_cu_idx == self.mesh.fractal.zoom_points.len() {
+                self.next_cu_idx = 1;
+                self.camera_uniform = self.mesh.fractal.zoom_points[0];
+            } else {
+                self.camera_uniform = next_zoom_point;
+            }
         }
+
+        let next = self.camera_uniform_queue.pop_front().unwrap();
+        self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[next]));
     }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {

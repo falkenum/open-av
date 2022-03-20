@@ -23,7 +23,7 @@ fn vs_main(
     in: VertexInput,
 ) -> VertexOutput {
     var out: VertexOutput;
-    out.clip_position = vec4<f32>(in.position * camera.scale - camera.origin, 1.0);
+    out.clip_position = vec4<f32>(camera.scale * (in.position - camera.origin), 1.0);
     out.color = in.color;
     return out;
 }

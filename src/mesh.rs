@@ -41,28 +41,26 @@ impl Vertex for MeshVertex {
     }
 }
 
-enum TrianglePointType {
-    LEFT,
-    RIGHT,
-    TOP,
-}
-
 pub struct Fractal {
     // counter-clockwise triangle vertices
     base: [cgmath::Vector3<f32>; 3],
     vertices: Vec<cgmath::Vector3<f32>>,
+    // base_radius: f32,
+
     radius_scale: f32,
-    pub zoom_points: VecDeque<crate::CameraUniform>,
-    next_zoom_point: TrianglePointType,
     num_layers: u32,
+
+    pub zoom_points: Vec<crate::CameraUniform>,
 }
 
 impl Fractal {
-    fn new(num_layers: u32) -> Self {
+    fn new() -> Self {
+        let num_layers = 9;
+
         let q120 = cgmath::Quaternion::from_angle_z(cgmath::Deg(120.0f32));
 
-        let r = 0.8;
-        let top = cgmath::vec3(0., r, 0.);
+        let radius = 0.8;
+        let top = cgmath::vec3(0., radius, 0.);
         let left = q120.rotate_vector(top);
         let right = q120.rotate_vector(left);
 
@@ -76,7 +74,7 @@ impl Fractal {
         let y2 = right[1];
 
         let dist_to_line = ((x2 - x1)*(y1 - y0) - (x1 - x0)*(y2 - y1)).abs() / ((x2 - x1).powf(2.) + (y2 - y1).powf(2.)).sqrt();
-        let scale = dist_to_line / r; 
+        let scale = dist_to_line / radius; 
 
         // let base_to_center_q = cgmath::Quaternion::from_angle_z(cgmath::Deg(180.0f32));
         let mut result = Self {
@@ -85,16 +83,38 @@ impl Fractal {
                 left,
                 right,
             ],
+            // base_radius: radius,
             vertices: Vec::new(),
             radius_scale: scale,
-            zoom_points: VecDeque::new(),
-            next_zoom_point: TrianglePointType::RIGHT,
             num_layers,
+            zoom_points: Vec::new(),
         };
 
         result.add_black_centers(cgmath::vec3(0., 0., 0.), dist_to_line, num_layers);
+        result.add_zoom_points(cgmath::vec3(0., 0., 0.), dist_to_line, num_layers);
 
         result
+    }
+
+    fn add_zoom_points(&mut self, origin: cgmath::Vector3<f32>, radius: f32, depth: u32) {
+        let q60 = cgmath::Quaternion::from_angle_z(cgmath::Deg(60.0f32));
+
+        if depth <= self.num_layers - 2 {
+            return 
+        }
+
+        let bottom = cgmath::vec3(0., -radius, 0.);
+        let right_child_origin = q60.rotate_vector(bottom);
+        let next_zoom_point = right_child_origin + origin;
+
+        self.zoom_points.push(
+            crate::CameraUniform { 
+                origin: next_zoom_point.into(),
+                scale: 1.0 / self.radius_scale.powf((self.num_layers - depth) as f32),
+            }
+        );
+
+        self.add_zoom_points(right_child_origin + origin, self.radius_scale * radius, depth - 1);
     }
 
     fn add_black_centers(&mut self, origin: cgmath::Vector3<f32>, radius: f32, depth: u32) {
@@ -116,25 +136,6 @@ impl Fractal {
         let right_child_origin = q60.rotate_vector(bottom);
         let top_child_origin = q60.rotate_vector(right);
         let left_child_origin = q60.rotate_vector(left);
-
-        let next_zoom_point = match self.next_zoom_point {
-            TrianglePointType::RIGHT => right_child_origin,
-            TrianglePointType::TOP => top_child_origin,
-            TrianglePointType::LEFT => left_child_origin,
-        } + origin;
-
-        self.zoom_points.push_back(
-            crate::CameraUniform { 
-                origin: next_zoom_point.into(),
-                scale: 1.0 / self.radius_scale.powf((self.num_layers - depth) as f32),
-            }
-        );
-
-        // self.next_zoom_point = match self.next_zoom_point {
-        //     TrianglePointType::RIGHT => TrianglePointType::TOP,
-        //     TrianglePointType::TOP => TrianglePointType::LEFT,
-        //     TrianglePointType::LEFT => TrianglePointType::RIGHT,
-        // };
 
         self.add_black_centers(right_child_origin + origin, self.radius_scale * radius, depth - 1);
         self.add_black_centers(top_child_origin + origin, self.radius_scale * radius, depth - 1);
@@ -173,7 +174,7 @@ pub struct Mesh {
 impl Mesh {
     pub fn new(device: &wgpu::Device) -> Self {
 
-        let fractal = Fractal::new(8);
+        let fractal = Fractal::new();
         let mesh_vertices = fractal.into_mesh_vertices();
 
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
