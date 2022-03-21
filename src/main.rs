@@ -289,8 +289,8 @@ impl Context {
             self.next_cu_idx += 1;
 
             if self.next_cu_idx == self.mesh.fractal.zoom_points.len() {
-                self.next_cu_idx = 1;
-                self.camera_uniform = self.mesh.fractal.zoom_points[0];
+                self.next_cu_idx = 3;
+                self.camera_uniform = self.mesh.fractal.zoom_points[2];
             } else {
                 self.camera_uniform = next_zoom_point;
             }

@@ -41,6 +41,12 @@ impl Vertex for MeshVertex {
     }
 }
 
+enum ZoomPointType {
+    TOP,
+    LEFT,
+    RIGHT
+}
+
 pub struct Fractal {
     // counter-clockwise triangle vertices
     base: [cgmath::Vector3<f32>; 3],
@@ -51,6 +57,7 @@ pub struct Fractal {
     num_layers: u32,
 
     pub zoom_points: Vec<crate::CameraUniform>,
+    zoom_point_dir: ZoomPointType,
 }
 
 impl Fractal {
@@ -88,6 +95,7 @@ impl Fractal {
             radius_scale: scale,
             num_layers,
             zoom_points: Vec::new(),
+            zoom_point_dir: ZoomPointType::RIGHT,
         };
 
         result.add_black_centers(cgmath::vec3(0., 0., 0.), dist_to_line, num_layers);
@@ -97,15 +105,26 @@ impl Fractal {
     }
 
     fn add_zoom_points(&mut self, origin: cgmath::Vector3<f32>, radius: f32, depth: u32) {
+        let q120 = cgmath::Quaternion::from_angle_z(cgmath::Deg(120.0f32));
         let q60 = cgmath::Quaternion::from_angle_z(cgmath::Deg(60.0f32));
 
-        if depth <= self.num_layers - 2 {
+        if depth < self.num_layers - 5 {
             return 
         }
 
         let bottom = cgmath::vec3(0., -radius, 0.);
+        let right = q120.rotate_vector(bottom);
+        let left = q120.rotate_vector(right);
+
         let right_child_origin = q60.rotate_vector(bottom);
-        let next_zoom_point = right_child_origin + origin;
+        let top_child_origin = q60.rotate_vector(right);
+        let left_child_origin = q60.rotate_vector(left);
+
+        let next_zoom_point = match self.zoom_point_dir {
+            ZoomPointType::RIGHT => right_child_origin,
+            ZoomPointType::TOP => top_child_origin,
+            ZoomPointType::LEFT => left_child_origin,
+        } + origin;
 
         self.zoom_points.push(
             crate::CameraUniform { 
@@ -114,7 +133,13 @@ impl Fractal {
             }
         );
 
-        self.add_zoom_points(right_child_origin + origin, self.radius_scale * radius, depth - 1);
+        self.zoom_point_dir  = match self.zoom_point_dir {
+            ZoomPointType::RIGHT => ZoomPointType::TOP,
+            ZoomPointType::TOP => ZoomPointType::LEFT,
+            ZoomPointType::LEFT => ZoomPointType::RIGHT,
+        };
+
+        self.add_zoom_points(next_zoom_point, self.radius_scale * radius, depth - 1);
     }
 
     fn add_black_centers(&mut self, origin: cgmath::Vector3<f32>, radius: f32, depth: u32) {
