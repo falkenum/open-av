@@ -8,12 +8,16 @@ use wgpu::util::DeviceExt;
 pub trait Vertex {
     fn desc<'a>() -> wgpu::VertexBufferLayout<'a>;
 }
+// const TEX_COORD_WHITE: [f32; 2] = [1.0, 0.0];
+// const TEX_COORD_BLACK: [f32; 2] = [0.0, 0.0];
+pub const NUM_FRACTAL_LAYERS: u32 = 12;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MeshVertex {
     pub position: [f32; 3],
-    pub color: [f32; 4],
+    // pub tex_coords: [f32; 2],
+    pub layer: u32
 }
 
 impl Vertex for MeshVertex {
@@ -30,11 +34,10 @@ impl Vertex for MeshVertex {
                     format: wgpu::VertexFormat::Float32x3,
                 },
 
-                // color
                 wgpu::VertexAttribute {
                     offset: mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x4,
+                    format: wgpu::VertexFormat::Uint32,
                 },
             ],
         }
@@ -50,7 +53,7 @@ enum ZoomPointType {
 pub struct Fractal {
     // counter-clockwise triangle vertices
     base: [cgmath::Vector3<f32>; 3],
-    vertices: Vec<cgmath::Vector3<f32>>,
+    vertices: Vec<(u32, cgmath::Vector3<f32>)>,
     // base_radius: f32,
 
     radius_scale: f32,
@@ -62,7 +65,7 @@ pub struct Fractal {
 
 impl Fractal {
     fn new() -> Self {
-        let num_layers = 9;
+        let num_layers = NUM_FRACTAL_LAYERS;
 
         let q120 = cgmath::Quaternion::from_angle_z(cgmath::Deg(120.0f32));
 
@@ -130,6 +133,8 @@ impl Fractal {
             crate::CameraUniform { 
                 origin: next_zoom_point.into(),
                 scale: 1.0 / self.radius_scale.powf((self.num_layers - depth) as f32),
+                layer: self.num_layers - depth,
+                _pad: [0;3],
             }
         );
 
@@ -149,14 +154,16 @@ impl Fractal {
         if depth == 0 {
             return 
         }
+        let layer = self.num_layers - depth;
 
+        // z is a fraction of the total depth
         let bottom = cgmath::vec3(0., -radius, 0.);
         let right = q120.rotate_vector(bottom);
         let left = q120.rotate_vector(right);
 
-        self.vertices.push(bottom + origin);
-        self.vertices.push(right + origin);
-        self.vertices.push(left + origin);
+        self.vertices.push((layer, bottom + origin));
+        self.vertices.push((layer, right + origin));
+        self.vertices.push((layer, left + origin));
 
         let right_child_origin = q60.rotate_vector(bottom);
         let top_child_origin = q60.rotate_vector(right);
@@ -170,17 +177,17 @@ impl Fractal {
     fn into_mesh_vertices(&self) -> Vec<MeshVertex> {
         let mut result = Vec::new();
         
-        for v in &self.base {
-            result.push(MeshVertex {
-                color: [1., 1., 1., 1.],
-                position: v.clone().into()
-            });
-        }
+        // for v in &self.base {
+        //     result.push(MeshVertex {
+        //         position: v.clone().into(),
+        //         layer: 0,
+        //     });
+        // }
 
-        for v in &self.vertices {
+        for (layer, v) in &self.vertices {
             result.push(MeshVertex {
-                color: [0., 0., 0., 1.],
                 position: v.clone().into(),
+                layer: layer.clone(), 
             });
         }
 
@@ -198,6 +205,7 @@ pub struct Mesh {
 
 impl Mesh {
     pub fn new(device: &wgpu::Device) -> Self {
+        // black pixel and white pixel
 
         let fractal = Fractal::new();
         let mesh_vertices = fractal.into_mesh_vertices();

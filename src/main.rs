@@ -1,6 +1,7 @@
 use std::{ops::{DerefMut, Deref}, iter, collections::VecDeque, time::Duration, borrow::Borrow};
 
 use async_std::{sync::{Arc, Mutex}, channel::Send};
+use image::GenericImageView;
 use log::error;
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, time::Instant};
 use cgmath::{InnerSpace, Rotation3, Zero};
@@ -34,6 +35,7 @@ struct Context {
     av_data_queue: Arc<Mutex<VecDeque<av::AvData>>>,
     mesh: mesh::Mesh,
     camera_bind_group: wgpu::BindGroup,
+    diffuse_bind_group: wgpu::BindGroup,
     // camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
     camera_uniform_queue: VecDeque<CameraUniform>,
@@ -46,13 +48,17 @@ struct Context {
 pub struct CameraUniform {
     origin: [f32; 3],
     scale: f32,
+    layer: u32,
+    _pad: [u32; 3],
 }
 
 impl CameraUniform {
     fn new() -> Self {
         Self {
             origin: [0.0, 0.0, 0.0],
-            scale: 1.0
+            scale: 1.0,
+            layer: 0,
+            _pad: [0; 3],
         }
     }
 }
@@ -83,7 +89,7 @@ impl Context {
             )
             .await
             .unwrap();
-
+        
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface.get_preferred_format(&adapter).unwrap(),
@@ -106,7 +112,7 @@ impl Context {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -126,10 +132,118 @@ impl Context {
             label: None,
         });
 
+        let mut pixel_data = vec![];
+
+        // want 7 visible layers of fractal
+        for i in 0..7 {
+            let val = (i as f32 / 7.0 * 255.0) as u8;
+            pixel_data.push(val);
+            pixel_data.push(val);
+            pixel_data.push(val);
+            pixel_data.push(255);
+        }
+
+        let diffuse_image = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_vec(pixel_data.len() as u32 / 4, 1, pixel_data).unwrap());
+        let texture_size = wgpu::Extent3d {
+            width: diffuse_image.dimensions().0,
+            height: diffuse_image.dimensions().1,
+            depth_or_array_layers: 1,
+        };
+
+        let diffuse_texture = device.create_texture(
+            &wgpu::TextureDescriptor {
+                // All textures are stored as 3D, we represent our 2D texture
+                // by setting depth to 1.
+                size: texture_size,
+                mip_level_count: 1, // We'll talk about this a little later
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                // Most images are stored using sRGB so we need to reflect that here.
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                // TEXTURE_BINDING tells wgpu that we want to use this texture in shaders
+                // COPY_DST means that we want to copy data to this texture
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                label: None,
+            }
+        );
+
+        queue.write_texture(
+            // Tells wgpu where to copy the pixel data
+            wgpu::ImageCopyTexture {
+                texture: &diffuse_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            // The actual pixel data
+            diffuse_image.as_rgba8().unwrap(),
+            // The layout of the texture
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: std::num::NonZeroU32::new(4 * diffuse_image.dimensions().0),
+                rows_per_image: std::num::NonZeroU32::new(diffuse_image.dimensions().1),
+            },
+            texture_size,
+        );
+
+        let diffuse_texture_view = diffuse_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let diffuse_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        let texture_bind_group_layout = device.create_bind_group_layout(
+            &wgpu::BindGroupLayoutDescriptor {
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(
+                            wgpu::SamplerBindingType::Filtering,
+                        ),
+                        count: None,
+                    },
+                ],
+                label: None,
+            }
+        );
+        
+        let diffuse_bind_group = device.create_bind_group(
+            &wgpu::BindGroupDescriptor {
+                layout: &texture_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&diffuse_texture_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&diffuse_sampler),
+                    }
+                ],
+                label: None,
+            }
+        );
+
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[&camera_bind_group_layout],
+                bind_group_layouts: &[&camera_bind_group_layout, &texture_bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -185,15 +299,11 @@ impl Context {
 
         let av = av::Av::play(String::from(source_file)).await;
         
-        let mut camera_uniform_queue = VecDeque::new();
-        let mut mesh = mesh::Mesh::new(&device);
+        let camera_uniform_queue = VecDeque::new();
+        let mesh = mesh::Mesh::new(&device);
 
         
-        let mut camera_uniform = CameraUniform::new();
-
-        for i in 0..mesh.fractal.zoom_points.len() {
-
-        }
+        let camera_uniform = CameraUniform::new();
 
         Self {
             mesh,
@@ -211,6 +321,7 @@ impl Context {
             camera_uniform_queue,
             camera_uniform,
             next_cu_idx: 0,
+            diffuse_bind_group,
         }
     }
 
@@ -333,6 +444,7 @@ impl Context {
 
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.diffuse_bind_group, &[]);
             render_pass.draw_mesh(&self.mesh)
             // render_pass.draw(0..3, 0..1)
 
